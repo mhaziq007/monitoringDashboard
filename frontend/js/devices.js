@@ -526,7 +526,10 @@ async function loadHistory(nextRange) {
 /** Fold the live total into the tail of the 6h series between DB writes. */
 function appendLivePower() {
     if (range !== '6h' || !trend) return;
-    const now = Date.now() / 1000;
+    // The chart places points by time, and the server stamps its own points,
+    // so take "now" from the newest report rather than this browser's clock:
+    // a few minutes of skew would otherwise open a fake gap at the right edge.
+    const now = Math.max(...[...nodes.values()].map((d) => d.last_seen || 0));
     const total = [...nodes.values()].filter(isOnline).reduce((sum, d) => sum + nodePower(d), 0);
     const points = trend.points;
     const last = points[points.length - 1];
