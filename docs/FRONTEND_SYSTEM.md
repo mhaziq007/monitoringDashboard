@@ -107,9 +107,11 @@ Rather than downloading external `.wav` or `.mp3` audio files, the dashboard syn
 
 #### 2. Interactive Power Trend Chart (`createTrendChart`)
 - Supports dynamic time ranges: `6H`, `24H`, `7D`, and `30D`.
+- Places points at their timestamps across the full window, which ends at the newest point. Where consecutive points are more than 2.5× the range's sample spacing apart (60 s for 6H, the SQL bucket size otherwise), nothing was recorded, typically because the server was down, so the line and fill break there instead of bridging the hole.
+- The live tail appended between server samples is stamped with the newest report's server time, not the browser clock, so clock skew cannot open a fake gap.
 - Computes horizontal watt gridlines with auto-scaling maximum peak headroom ($+12\%$).
 - Implements interactive mouse tracking:
-  - Draws a vertical hover crosshair.
+  - Draws a vertical hover crosshair on the point nearest in time to the pointer.
   - Renders a positioned tooltip box displaying the exact wattage and formatted local timestamp.
 
 ---

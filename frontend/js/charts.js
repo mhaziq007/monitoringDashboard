@@ -106,6 +106,15 @@ function fullLabel(unixSeconds, range) {
 
 const PAD = { top: 14, right: 10, bottom: 22, left: 38 };
 
+// Seconds each range covers, and the server's spacing between its points
+// (the raw 1-minute samples for 6h, the SQL bucket size for the rest).
+const SPAN = { '6h': 21600, '24h': 86400, '7d': 604800, '30d': 2592000 };
+const STEP = { '6h': 60, '24h': 300, '7d': 1800, '30d': 7200 };
+
+// A wider spacing than this means nothing was recorded in between (the
+// server was down), so the line breaks there instead of bridging the hole.
+const GAP_STEPS = 2.5;
+
 /**
  * Lab power over time, with a hover crosshair and readout.
  * Returns a controller so the page can push new data and force redraws.
@@ -119,12 +128,38 @@ export function createTrendChart(canvas, tip) {
     function geometry() {
         const width = canvas.clientWidth;
         const height = canvas.clientHeight;
+        // Points sit at their timestamps across the whole range. Spacing them
+        // evenly by index squeezed hours of downtime out of the picture. The
+        // window ends at the newest point, so it uses the server's clock
+        // rather than comparing it with this browser's.
+        const end = points.length ? points[points.length - 1].time : 0;
+        const start = end - SPAN[range];
+        const plotW = width - PAD.left - PAD.right;
         return {
             width,
             height,
-            plotW: width - PAD.left - PAD.right,
+            plotW,
             plotH: height - PAD.top - PAD.bottom,
+            start,
+            xAt: (time) => PAD.left + ((time - start) / SPAN[range]) * plotW,
+            timeAt: (x) => start + ((x - PAD.left) / plotW) * SPAN[range],
         };
+    }
+
+    /** Split the series into runs with no gap inside them. */
+    function runs() {
+        const limit = STEP[range] * GAP_STEPS;
+        const out = [];
+        let run = [];
+        points.forEach((p, i) => {
+            if (i > 0 && p.time - points[i - 1].time > limit) {
+                out.push(run);
+                run = [];
+            }
+            run.push(p);
+        });
+        if (run.length) out.push(run);
+        return out;
     }
 
     function draw() {
@@ -143,8 +178,9 @@ export function createTrendChart(canvas, tip) {
         }
 
         peak = Math.max(50, ...points.map((p) => p.power)) * 1.12;
-        const xAt = (i) => PAD.left + (i / (points.length - 1)) * g.plotW;
+        const { xAt } = g;
         const yAt = (w) => PAD.top + g.plotH - (w / peak) * g.plotH;
+        const baseline = PAD.top + g.plotH;
 
         // Horizontal grid with watt labels on the left gutter.
         ctx.strokeStyle = cssVar('--border');
@@ -165,52 +201,62 @@ export function createTrendChart(canvas, tip) {
         }
 
         const color = cssVar('--m-power');
-
-        // Area fill.
-        ctx.beginPath();
-        ctx.moveTo(xAt(0), yAt(points[0].power));
-        points.forEach((p, i) => ctx.lineTo(xAt(i), yAt(p.power)));
-        ctx.lineTo(xAt(points.length - 1), PAD.top + g.plotH);
-        ctx.lineTo(xAt(0), PAD.top + g.plotH);
-        ctx.closePath();
-        const gradient = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + g.plotH);
+        const gradient = ctx.createLinearGradient(0, PAD.top, 0, baseline);
         gradient.addColorStop(0, withAlpha(color, 0.2));
         gradient.addColorStop(1, withAlpha(color, 0));
-        ctx.fillStyle = gradient;
-        ctx.fill();
 
-        // Trend line.
-        ctx.beginPath();
-        points.forEach((p, i) => {
-            const x = xAt(i);
-            const y = yAt(p.power);
-            if (i === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-        });
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.75;
-        ctx.lineJoin = 'round';
-        ctx.lineCap = 'round';
-        ctx.stroke();
+        for (const run of runs()) {
+            if (run.length === 1) {
+                // A lone sample between two gaps would otherwise be invisible.
+                ctx.beginPath();
+                ctx.arc(xAt(run[0].time), yAt(run[0].power), 2, 0, Math.PI * 2);
+                ctx.fillStyle = color;
+                ctx.fill();
+                continue;
+            }
 
-        // Time axis: four evenly spaced labels.
+            // Area fill, closed down to the baseline at both ends of the run.
+            ctx.beginPath();
+            ctx.moveTo(xAt(run[0].time), baseline);
+            run.forEach((p) => ctx.lineTo(xAt(p.time), yAt(p.power)));
+            ctx.lineTo(xAt(run[run.length - 1].time), baseline);
+            ctx.closePath();
+            ctx.fillStyle = gradient;
+            ctx.fill();
+
+            // Trend line.
+            ctx.beginPath();
+            run.forEach((p, i) => {
+                if (i === 0) ctx.moveTo(xAt(p.time), yAt(p.power));
+                else ctx.lineTo(xAt(p.time), yAt(p.power));
+            });
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.75;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.stroke();
+        }
+
+        // Time axis: four labels evenly spaced in time across the window.
         ctx.fillStyle = cssVar('--fg-faint');
         ctx.font = '500 10px Inter, sans-serif';
         ctx.textBaseline = 'top';
-        const ticks = [0, 0.33, 0.66, 1].map((f) => Math.round(f * (points.length - 1)));
-        ticks.forEach((i, n) => {
+        const ticks = [0, 1 / 3, 2 / 3, 1];
+        ticks.forEach((f, n) => {
+            const time = g.start + f * SPAN[range];
             ctx.textAlign = n === 0 ? 'left' : n === ticks.length - 1 ? 'right' : 'center';
-            ctx.fillText(timeLabel(points[i].time, range), xAt(i), height - PAD.bottom + 8);
+            ctx.fillText(timeLabel(time, range), xAt(time), height - PAD.bottom + 8);
         });
 
         // Hover crosshair.
         if (hoverIndex >= 0 && hoverIndex < points.length) {
-            const x = xAt(hoverIndex);
+            const x = xAt(points[hoverIndex].time);
             const y = yAt(points[hoverIndex].power);
             ctx.strokeStyle = cssVar('--border-strong');
+            ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(Math.round(x) + 0.5, PAD.top);
-            ctx.lineTo(Math.round(x) + 0.5, PAD.top + g.plotH);
+            ctx.lineTo(Math.round(x) + 0.5, baseline);
             ctx.stroke();
 
             ctx.beginPath();
@@ -223,12 +269,25 @@ export function createTrendChart(canvas, tip) {
         }
     }
 
+    /** Index of the point nearest in time to the pointer; points are sorted. */
+    function nearest(time) {
+        let lo = 0;
+        let hi = points.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (points[mid].time < time) lo = mid + 1;
+            else hi = mid;
+        }
+        if (lo > 0 && time - points[lo - 1].time < points[lo].time - time) lo -= 1;
+        return lo;
+    }
+
     function onMove(event) {
         if (points.length < 2) return;
         const rect = canvas.getBoundingClientRect();
         const g = geometry();
-        const ratio = (event.clientX - rect.left - PAD.left) / g.plotW;
-        const index = Math.round(Math.max(0, Math.min(1, ratio)) * (points.length - 1));
+        const x = Math.max(PAD.left, Math.min(PAD.left + g.plotW, event.clientX - rect.left));
+        const index = nearest(g.timeAt(x));
 
         if (index !== hoverIndex) {
             hoverIndex = index;
@@ -237,7 +296,7 @@ export function createTrendChart(canvas, tip) {
 
         const p = points[index];
         tip.innerHTML = `<b>${p.power.toFixed(0)} W</b><br><span>${fullLabel(p.time, range)}</span>`;
-        tip.style.left = `${PAD.left + (index / (points.length - 1)) * g.plotW}px`;
+        tip.style.left = `${g.xAt(p.time)}px`;
         tip.style.top = `${PAD.top + g.plotH - (p.power / peak) * g.plotH - 10}px`;
         tip.classList.add('is-visible');
     }
@@ -254,8 +313,12 @@ export function createTrendChart(canvas, tip) {
 
     return {
         setData(nextPoints, nextRange) {
-            points = nextPoints || [];
             if (nextRange) range = nextRange;
+            // The 6h buffer can run a few minutes past the window; drop those
+            // so neither the line nor the hover reaches into the axis gutter.
+            const all = nextPoints || [];
+            const end = all.length ? all[all.length - 1].time : 0;
+            points = all.filter((p) => p.time >= end - SPAN[range]);
             draw();
         },
         get points() { return points; },

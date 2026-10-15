@@ -50,6 +50,15 @@ def init_db():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_power_log_timestamp ON power_log(timestamp)")
+
+        # Last report of every node. Without it a restart forgot any node that
+        # was offline at the time, and blanked the rest until they reported.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS devices (
+                hostname TEXT PRIMARY KEY,
+                data TEXT
+            )
+        """)
         
         # Users table
         cursor.execute("""
@@ -149,6 +158,34 @@ def load_power_history_from_db():
         conn.close()
     except Exception as e:
         print(f"Error loading power history: {e}")
+
+def load_devices_from_db():
+    """Restore every known node; each shows offline until it reports again."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("SELECT hostname, data FROM devices").fetchall()
+        conn.close()
+        for hostname, data in rows:
+            device = json.loads(data)
+            device["latency"] = None
+            devices[hostname] = device
+    except Exception as e:
+        print(f"Error loading devices: {e}")
+
+def device_rows() -> List[tuple]:
+    """Serialise the registry on the event loop, before a thread writes it."""
+    return [(name, json.dumps(info)) for name, info in list(devices.items())]
+
+def save_devices_to_db(rows: List[tuple]):
+    """Replace the stored registry, so forgotten nodes drop out of it too."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        with conn:
+            conn.execute("DELETE FROM devices")
+            conn.executemany("INSERT INTO devices (hostname, data) VALUES (?, ?)", rows)
+        conn.close()
+    except Exception as e:
+        print(f"Error saving devices: {e}")
 
 def load_services_config():
     """Load services to monitor from services.json."""
@@ -300,6 +337,9 @@ async def ping_background_loop():
 async def record_power_history_loop():
     """Background task to periodically record the total power draw of the lab."""
     while True:
+        # Sleep first: sampling at startup, before any agent had reported,
+        # wrote a 0 W point into the history on every restart.
+        await asyncio.sleep(60.0)
         try:
             current_time = time.time()
             total_power = 0.0
@@ -343,9 +383,9 @@ async def record_power_history_loop():
                     print(f"Error writing power to db: {db_err}")
             
             await asyncio.to_thread(db_write)
+            await asyncio.to_thread(save_devices_to_db, device_rows())
         except Exception as e:
             print(f"Error in power history loop: {e}")
-        await asyncio.sleep(60.0)
 
 async def check_services_loop():
     """Background task to query services status every 30 seconds."""
@@ -365,6 +405,7 @@ async def check_services_loop():
 async def startup_event():
     init_db()
     load_power_history_from_db()
+    load_devices_from_db()
     load_services_config()
     # Start the non-blocking background ping sweep
     asyncio.create_task(ping_background_loop())
@@ -372,6 +413,11 @@ async def startup_event():
     asyncio.create_task(record_power_history_loop())
     # Start the services loop
     asyncio.create_task(check_services_loop())
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # The loop only saves once a minute; keep the latest reports on a restart.
+    save_devices_to_db(device_rows())
 
 # Authentication & User Management Endpoints
 
@@ -532,6 +578,15 @@ async def get_devices(current_user: str = Depends(get_current_user)):
         name: get_device_status(info, current_time)
         for name, info in devices.items()
     }
+
+@app.delete("/api/devices/{hostname}")
+async def forget_device(hostname: str, current_user: str = Depends(get_current_user)):
+    """Drop a retired or renamed node. One still running an agent comes back."""
+    if devices.pop(hostname, None) is None:
+        raise HTTPException(status_code=404, detail="Unknown device")
+    await asyncio.to_thread(save_devices_to_db, device_rows())
+    await broadcast("removed", {"hostname": hostname})
+    return {"status": "ok"}
 
 @app.get("/api/power-history")
 async def get_power_history(range: str = "6h", current_user: str = Depends(get_current_user)):
