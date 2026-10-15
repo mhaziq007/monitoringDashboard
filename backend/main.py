@@ -305,7 +305,9 @@ async def record_power_history_loop():
             total_power = 0.0
             for device in list(devices.values()):
                 is_active = (current_time - device.get("last_seen", 0)) < OFFLINE_THRESHOLD
-                if is_active:
+                # A VM's draw is either already in its host's reading or, for
+                # a cloud instance, not on this lab's bill at all.
+                if is_active and not device.get("is_vm"):
                     cpu_p = device.get("cpu_power")
                     gpu_info = device.get("gpu")
                     gpu_p = gpu_info.get("power") if gpu_info else None

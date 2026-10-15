@@ -43,7 +43,9 @@ function savePinned() {
 // browser's clock shifted the offline window by however far the two disagreed.
 // ingest() re-anchors the server-reported age to the local clock instead.
 const isOnline = (device) => (Date.now() / 1000 - device.seen_at) < OFFLINE_AFTER;
-const nodePower = (d) => (d.cpu_power || 0) + (d.gpu?.power || 0);
+// A VM's draw is either already in its host's reading or, for a cloud
+// instance, not on this lab's bill, so it counts as nothing everywhere.
+const nodePower = (d) => (d.is_vm ? 0 : (d.cpu_power || 0) + (d.gpu?.power || 0));
 
 /* --- Node card ---------------------------------------------------------- */
 
@@ -202,6 +204,8 @@ function updateCard(device) {
 
     // Chips describe what the drawer holds; only rebuild when that changes.
     const chips = [];
+    // First, so the chip row's fade-out never hides it.
+    if (device.is_vm) chips.push(['vm', 'fa-cloud', 'VM']);
     if (device.gpu) chips.push(['gpu', 'fa-microchip', 'GPU']);
     const diskCount = device.disks?.length || (device.disk ? 1 : 0);
     if (diskCount) chips.push(['disk', 'fa-hard-drive', `${diskCount} disk${diskCount > 1 ? 's' : ''}`]);
@@ -313,6 +317,8 @@ function updateFleet() {
     const all = [...nodes.values()];
     const live = all.filter(isOnline);
     const power = live.reduce((sum, d) => sum + nodePower(d), 0);
+    const drawing = live.filter((d) => !d.is_vm).length;
+    const vms = live.length - drawing;
     const alerting = live.filter(hasAlert).length;
     const updates = live.reduce((sum, d) => sum + (d.pending_updates || 0), 0);
 
@@ -335,7 +341,8 @@ function updateFleet() {
     tone('stat-alerts-card', alerting ? 'crit' : '');
 
     set('stat-power', `${power.toFixed(0)}<small> W</small>`);
-    set('stat-power-foot', `${live.length} node${live.length === 1 ? '' : 's'} drawing`);
+    set('stat-power-foot', `${drawing} node${drawing === 1 ? '' : 's'} drawing`
+        + (vms ? ` · ${vms} VM${vms === 1 ? '' : 's'} excluded` : ''));
 
     set('stat-cost', money(power * MONTHLY_COST_PER_WATT));
     set('stat-cost-foot', `per month at $${KWH_RATE.toFixed(2)}/kWh`);
@@ -409,7 +416,7 @@ function renderDrawer() {
     const online = isOnline(device);
     document.getElementById('drawer-name').textContent = device.hostname;
     document.getElementById('drawer-sub').textContent =
-        `${device.ip || 'Unknown address'} · ${device.os_info || 'Unknown OS'}`;
+        `${device.ip || 'Unknown address'} · ${device.os_info || 'Unknown OS'}${device.is_vm ? ' · VM' : ''}`;
     const status = document.getElementById('drawer-status');
     status.dataset.state = online ? 'online' : 'offline';
     status.querySelector('span').textContent = online ? 'Online' : 'Offline';
@@ -424,7 +431,8 @@ function renderDrawer() {
         ${kvItem('Uptime', uptime(device.uptime))}
         ${kvItem('Latency', device.latency != null ? `${device.latency.toFixed(0)} ms` : '—', latencyTone(device.latency))}
         ${kvItem('Updates', device.pending_updates ?? 0, device.pending_updates ? 'warn' : '')}
-    </div>`, power > 0 ? `${money(power * MONTHLY_COST_PER_WATT)}/mo` : ''));
+    </div>`, device.is_vm ? 'VM, not in lab power'
+        : power > 0 ? `${money(power * MONTHLY_COST_PER_WATT)}/mo` : ''));
 
     const ramPct = device.memory ? (device.memory.used / device.memory.total) * 100 : 0;
     parts.push(section('Compute', 'fa-microchip', `

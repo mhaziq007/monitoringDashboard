@@ -166,6 +166,18 @@ To ensure that package checks never block the 5-second real-time metrics push lo
 
 ---
 
+### 2.9 Virtual Machine Detection
+Every report carries `is_vm`. The dashboard leaves VMs out of the lab power total, the power history and the running cost: a local VM's draw is already in its host's reading, and a cloud instance (Oracle Cloud, AWS, ...) is not on the lab's electricity bill at all. VMs still report every other metric and get a **VM** chip on their card.
+
+Detection runs once at startup:
+- **Linux**: `systemd-detect-virt --vm`. Without systemd, the `hypervisor` CPU flag or a known hypervisor/cloud name in `/sys/class/dmi/id/` (`sys_vendor`, `product_name`, `chassis_asset_tag`).
+- **Windows**: `Win32_ComputerSystem` manufacturer and model (e.g. `Microsoft Corporation Virtual Machine`, `QEMU`, `VMware`).
+- **macOS**: `sysctl kern.hv_vmm_present`.
+
+Set `HOMELAB_IS_VM=yes` or `no` in the agent environment to override detection (`auto` is the default). The install scripts take the same value as `--vm` (Linux) or `-Vm` (Windows). The agent logs the result at startup as `Node type: ...`.
+
+---
+
 ## 3. Installation & Daemon Configuration
 
 ### 3.1 Linux / NAS Installation

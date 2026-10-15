@@ -11,6 +11,8 @@
 #   --key <key>       agent key from the server (printed by install-server.sh)
 #   --interval <sec>  reporting interval (default: 5)
 #   --user <name>     user to run the agent as (default: root)
+#   --vm <auto|yes|no>  whether this node is a virtual machine; VMs are left
+#                     out of the power and cost totals (default: auto-detect)
 #
 # Config is written to /etc/homelab-agent.env, so agent.py itself is never
 # edited and stays in sync with git.
@@ -23,6 +25,7 @@ SERVER=""
 KEY=""
 INTERVAL=5
 RUN_USER="root"
+IS_VM=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -30,6 +33,7 @@ while [[ $# -gt 0 ]]; do
         --key)      KEY="$2";      shift 2 ;;
         --interval) INTERVAL="$2"; shift 2 ;;
         --user)     RUN_USER="$2"; shift 2 ;;
+        --vm)       IS_VM="$2";    shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -46,7 +50,14 @@ if [[ -f "$ENV_FILE" ]]; then
     source "$ENV_FILE"
     [[ -z "$SERVER" ]] && SERVER="${HOMELAB_SERVER_URL:-}"
     [[ -z "$KEY" ]] && KEY="${HOMELAB_AGENT_KEY:-}"
+    [[ -z "$IS_VM" ]] && IS_VM="${HOMELAB_IS_VM:-}"
 fi
+IS_VM="${IS_VM:-auto}"
+
+case "$IS_VM" in
+    auto|yes|no) ;;
+    *) echo "--vm takes auto, yes or no (got '$IS_VM')." >&2; exit 1 ;;
+esac
 
 if [[ -z "$SERVER" || -z "$KEY" ]]; then
     echo "Both --server and --key are required on first install." >&2
@@ -116,6 +127,7 @@ cat > "$ENV_FILE" <<ENV
 HOMELAB_SERVER_URL=$REPORT_URL
 HOMELAB_AGENT_KEY=$KEY
 HOMELAB_INTERVAL=$INTERVAL
+HOMELAB_IS_VM=$IS_VM
 ENV
 # Contains the shared agent key.
 chmod 600 "$ENV_FILE"

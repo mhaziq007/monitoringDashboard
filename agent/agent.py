@@ -15,6 +15,9 @@ import psutil
 SERVER_URL = os.environ.get("HOMELAB_SERVER_URL", "http://192.168.1.106:8000/api/report")
 AGENT_KEY = os.environ.get("HOMELAB_AGENT_KEY", "")
 INTERVAL = int(os.environ.get("HOMELAB_INTERVAL", "5"))  # Reporting interval in seconds
+# yes / no / auto (default). VMs are left out of the dashboard's power and cost
+# totals; auto-detection covers local hypervisors and cloud instances alike.
+IS_VM_SETTING = os.environ.get("HOMELAB_IS_VM", "auto").strip().lower()
 
 # Prevent console window popping up/stealing focus when spawning subprocesses on Windows
 creationflags = 0x08000000 if os.name == 'nt' else 0
@@ -31,6 +34,7 @@ class AgentState:
         self.last_rapl_time = None
         self.pending_updates = 0
         self.last_update_check = 0.0
+        self.is_vm = False
 
 state = AgentState()
 
@@ -87,6 +91,70 @@ def get_os_info():
     except Exception:
         pass
     return f"{platform.system()} {platform.release()}"
+
+# Strings that only virtual hardware puts in its DMI (Linux) or WMI (Windows)
+# vendor and model fields. OCI tags its instances "OracleCloud.com".
+VM_MARKERS = ("kvm", "qemu", "vmware", "virtualbox", "innotek", "xen", "bochs",
+              "virtual machine", "amazon ec2", "google compute engine",
+              "openstack", "oraclecloud")
+
+def detect_vm():
+    """Return what gave this machine away as a virtual machine, or None."""
+    sys_name = platform.system()
+    try:
+        if sys_name == "Linux":
+            try:
+                # --vm leaves containers out: an agent in a container is
+                # usually the only one reporting for that physical machine.
+                res = subprocess.run(["systemd-detect-virt", "--vm"], stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True, timeout=5)
+                # Prints "none" and exits non-zero on bare metal.
+                return res.stdout.strip() if res.returncode == 0 else None
+            except FileNotFoundError:
+                pass
+
+            # No systemd (Alpine, some NAS firmware). x86 guests carry the
+            # hypervisor CPU flag; ARM ones (OCI Ampere) only show up in DMI.
+            with open("/proc/cpuinfo", "r") as f:
+                for line in f:
+                    if line.startswith("flags") and "hypervisor" in line.split():
+                        return "hypervisor"
+            dmi = []
+            for field in ("sys_vendor", "product_name", "chassis_asset_tag"):
+                path = f"/sys/class/dmi/id/{field}"
+                if os.path.exists(path):
+                    with open(path, "r") as f:
+                        dmi.append(f.read().strip())
+            text = " ".join(dmi)
+            if any(marker in text.lower() for marker in VM_MARKERS):
+                return text
+        elif sys_name == "Windows":
+            # Not HypervisorPresent: that is also true on a physical host
+            # running Hyper-V, WSL2 or VBS.
+            cmd = ['powershell', '-Command', '$c = Get-CimInstance Win32_ComputerSystem; "$($c.Manufacturer) $($c.Model)"']
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, creationflags=creationflags)
+            text = res.stdout.strip()
+            if any(marker in text.lower() for marker in VM_MARKERS):
+                return text
+        elif sys_name == "Darwin":
+            res = subprocess.run(["sysctl", "-n", "kern.hv_vmm_present"], stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, text=True, timeout=5)
+            if res.stdout.strip() == "1":
+                return "hypervisor"
+    except Exception:
+        pass
+    return None
+
+def resolve_is_vm():
+    """Return (is_vm, reason), with HOMELAB_IS_VM overriding detection."""
+    if IS_VM_SETTING in ("yes", "true", "1", "on"):
+        return True, "HOMELAB_IS_VM"
+    if IS_VM_SETTING in ("no", "false", "0", "off"):
+        return False, "HOMELAB_IS_VM"
+    if IS_VM_SETTING not in ("", "auto"):
+        print(f"Ignoring HOMELAB_IS_VM={IS_VM_SETTING!r}; expected yes, no or auto.")
+    found = detect_vm()
+    return found is not None, f"detected: {found}" if found else "detected"
 
 def query_pending_updates():
     """Retrieve the number of pending OS updates."""
@@ -512,7 +580,8 @@ def gather_metrics():
         "gpu": gpu,
         "vpns": vpns,
         "docker_containers": docker_containers,
-        "pending_updates": state.pending_updates
+        "pending_updates": state.pending_updates,
+        "is_vm": state.is_vm
     }
 
 def send_metrics(data):
@@ -542,8 +611,11 @@ def main():
         print("Set it in the agent environment file, or re-run the install script.")
         return
 
+    state.is_vm, reason = resolve_is_vm()
+
     print(f"Starting Enhanced Home Lab Dashboard Agent...")
     print(f"Target Server: {SERVER_URL}")
+    print(f"Node type: {'virtual machine' if state.is_vm else 'physical'} ({reason})")
     print(f"Press Ctrl+C to exit.")
     
     while True:
