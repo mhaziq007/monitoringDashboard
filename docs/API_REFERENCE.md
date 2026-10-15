@@ -196,9 +196,12 @@ Endpoint for client nodes to push system metrics every 5 seconds.
     { "name": "jellyfin", "state": "Running" },
     { "name": "postgres", "state": "Running" }
   ],
-  "pending_updates": 3
+  "pending_updates": 3,
+  "is_vm": false
 }
 ```
+`is_vm: true` marks a virtual machine. Its `cpu_power` and `gpu.power` are left out of the power history and the dashboard's power and cost totals.
+
 - **Success Response**: `200 OK`
 ```json
 {

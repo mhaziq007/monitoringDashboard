@@ -198,6 +198,8 @@ The manual steps below are the same thing by hand.
    HOMELAB_SERVER_URL=https://dashboard.homelab.local/api/report
    HOMELAB_AGENT_KEY=<YOUR_SERVER_AGENT_KEY>
    HOMELAB_INTERVAL=5
+   # yes / no / auto: VMs are left out of the power and cost totals
+   HOMELAB_IS_VM=auto
    ENV
    sudo chmod 600 /etc/homelab-agent.env
    ```

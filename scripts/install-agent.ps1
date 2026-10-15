@@ -13,6 +13,10 @@
     Configuration lives in the generated launcher, so agent.py is never edited
     and stays in sync with git.
 
+.PARAMETER Vm
+    Whether this node is a virtual machine: auto (default, detected by the
+    agent), yes or no. VMs are left out of the power and cost totals.
+
 .PARAMETER AtLogon
     Run the agent when the current user logs on, instead of at system startup
     as SYSTEM. Use this if the agent needs the interactive desktop session.
@@ -22,6 +26,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Server,
     [Parameter(Mandatory = $true)][string]$Key,
     [int]$Interval = 5,
+    [ValidateSet('auto', 'yes', 'no')][string]$Vm = 'auto',
     [switch]$AtLogon
 )
 
@@ -147,6 +152,7 @@ Write-Host "==> Writing $launcher"
 set HOMELAB_SERVER_URL=$reportUrl
 set HOMELAB_AGENT_KEY=$Key
 set HOMELAB_INTERVAL=$Interval
+set HOMELAB_IS_VM=$Vm
 "$pythonw" "$(Join-Path $agentDir 'agent.py')"
 "@ | Set-Content -Path $launcher -Encoding ASCII
 

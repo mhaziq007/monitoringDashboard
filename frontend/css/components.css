@@ -157,6 +157,7 @@
 .chip[data-kind='disk']   i { color: var(--m-disk); }
 .chip[data-kind='docker'] i { color: #2496ed; }
 .chip[data-kind='vpn']    i { color: var(--accent-hover); }
+.chip[data-kind='vm']     i { color: var(--accent); }
 
 /* --- Meter (progress bar) ----------------------------------------------- */
 .meter {
