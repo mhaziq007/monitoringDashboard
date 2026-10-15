@@ -240,7 +240,17 @@ Returns current state of all known hosts, enriched with online/offline calculati
 
 ---
 
-### 3.3 Power Draw History
+### 3.3 Remove a Device
+Drops a retired or renamed node from the dashboard and from the stored registry. A node whose agent is still running reappears with its next report.
+
+- **Endpoint**: `DELETE /api/devices/{hostname}`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **Success Response**: `200 OK` with `{"status": "ok"}`, and a `removed` event on the stream.
+- **Error Responses**: `404 Not Found` if no node has that hostname.
+
+---
+
+### 3.4 Power Draw History
 Returns time-series lab power wattage downsampled based on the requested window.
 
 - **Endpoint**: `GET /api/power-history`
@@ -263,7 +273,7 @@ Returns time-series lab power wattage downsampled based on the requested window.
 
 ---
 
-### 3.4 Services Status
+### 3.5 Services Status
 Returns the list of monitored self-hosted web applications with reachability and latency. Internal URLs are sanitized and never exposed.
 
 - **Endpoint**: `GET /api/services`
@@ -310,7 +320,7 @@ Establishes a persistent, unidirectionally streamed HTTP connection.
 #### Event Types
 
 ##### `init`
-Sent immediately upon SSE connection. Contains an array of all known device records.
+Sent immediately upon SSE connection, including every reconnect. Contains an array of all known device records, including offline nodes restored from the database after a server restart.
 ```text
 event: init
 data: [{"hostname": "falcon-nas", "ip": "192.168.1.105", "online": true, ...}, {"hostname": "gaming-rig", ...}]
@@ -321,6 +331,13 @@ Broadcast whenever a client node posts new metrics or whenever the latency sweep
 ```text
 event: metrics
 data: {"hostname": "falcon-nas", "cpu_usage": 15.2, "temp": 49.0, "online": true, "latency": 1.1, ...}
+```
+
+##### `removed`
+Broadcast when a node is removed with `DELETE /api/devices/{hostname}`.
+```text
+event: removed
+data: {"hostname": "old-nas"}
 ```
 
 ##### `services_init`

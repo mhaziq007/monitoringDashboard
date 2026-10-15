@@ -26,7 +26,7 @@ graph TD
         API["REST API<br/>/api/report<br/>/api/devices<br/>/api/power-history"]
         AUTH["Security & Auth<br/>PBKDF2-SHA256<br/>X-Agent-Key Verification"]
         MEM["In-Memory Cache<br/>devices: Dict[str, dict]<br/>power_history: List[dict]"]
-        DB[("SQLite history.db<br/>power_log, users<br/>sessions, settings")]
+        DB[("SQLite history.db<br/>power_log, devices, users<br/>sessions, settings")]
         PING_BG["Background Ping Sweeper<br/>(Every 10s ICMP)"]
         SVC_BG["Service Health Worker<br/>(Every 30s HTTP Probe)"]
         PWR_BG["Power Aggregator<br/>(Every 60s DB Logger)"]
@@ -76,7 +76,7 @@ graph TD
    - `last_seen` timestamp is updated to `time.time()`.
    - Current ping latency (if measured by the background sweeper) is preserved and attached.
    - Live `online` boolean state is calculated (`current_time - last_seen < 15s`).
-3. **State Storage**: The record is stored in the in-memory `devices` dictionary (`devices[hostname] = data`).
+3. **State Storage**: The record is stored in the in-memory `devices` dictionary (`devices[hostname] = data`). The power loop copies that registry to the SQLite `devices` table every minute, and the server saves it again on shutdown. On startup it is loaded back, so a restart keeps every node, including ones that are offline at the time; each shows as offline until it reports again.
 4. **SSE Broadcast**: The enriched node state is immediately broadcast to all active SSE listener queues.
 
 ### Step 3: Real-Time Browser Rendering (`devices.js`)
@@ -117,6 +117,11 @@ erDiagram
         REAL power
     }
 
+    DEVICES {
+        TEXT hostname PK
+        TEXT data
+    }
+
     USERS ||--o{ SESSIONS : "owns"
 ```
 
@@ -132,6 +137,17 @@ CREATE TABLE IF NOT EXISTS power_log (
 CREATE INDEX IF NOT EXISTS idx_power_log_timestamp ON power_log(timestamp);
 ```
 - **Pruning**: A background loop executes `DELETE FROM power_log WHERE timestamp < ?` every 60 seconds to purge entries older than **30 days** (2,592,000 seconds).
+
+#### `devices`
+The last report from every node, as JSON, so the node list survives a restart.
+```sql
+CREATE TABLE IF NOT EXISTS devices (
+    hostname TEXT PRIMARY KEY,
+    data TEXT
+);
+```
+- **Writes**: Replaced as a whole every 60 seconds by the power loop and once more on shutdown.
+- **Removal**: `DELETE /api/devices/{hostname}` (the trash button on an offline node's drawer) drops a retired or renamed node.
 
 #### `users`
 Stores administrative accounts.
@@ -228,9 +244,9 @@ sequenceDiagram
 - **Result**: Parses round-trip latency (ms) via regex and broadcasts updated latency to active clients.
 
 ### 2. `record_power_history_loop()`
-- **Interval**: 60 seconds.
-- **Action**: Aggregates CPU and GPU wattage across all active nodes (`is_active = (now - last_seen) < 15s`).
-- **Result**: Appends to in-memory `power_history` buffer and executes non-blocking thread-pool SQLite write (`asyncio.to_thread`) to persist point to `power_log` and prune data older than 30 days.
+- **Interval**: 60 seconds. The first sample is taken a minute after startup, once agents have reported; sampling straight away recorded 0 W on every restart.
+- **Action**: Aggregates CPU and GPU wattage across all active, non-VM nodes (`is_active = (now - last_seen) < 15s`).
+- **Result**: Appends to in-memory `power_history` buffer and executes non-blocking thread-pool SQLite write (`asyncio.to_thread`) to persist point to `power_log` and prune data older than 30 days. It then saves the device registry to the `devices` table.
 
 ### 3. `check_services_loop()`
 - **Interval**: 30 seconds.

@@ -3,7 +3,7 @@
 import { ensureAuthenticated } from './auth.js';
 import { mountShell } from './shell.js';
 import { connectStream } from './stream.js';
-import { getJson } from './api.js';
+import { api, getJson } from './api.js';
 import { toast, chime, unlockAudioOnInteraction } from './toast.js';
 import { drawSparkline, createTrendChart } from './charts.js';
 import {
@@ -420,6 +420,8 @@ function renderDrawer() {
     const status = document.getElementById('drawer-status');
     status.dataset.state = online ? 'online' : 'offline';
     status.querySelector('span').textContent = online ? 'Online' : 'Offline';
+    // An online node would be back with its next report, seconds later.
+    document.getElementById('drawer-forget').hidden = online;
 
     const power = nodePower(device);
     const parts = [];
@@ -547,14 +549,37 @@ function ingest(device) {
         ? device.last_seen
         : Date.now() / 1000 - device.age;
 
-    // The server re-broadcasts each node every 10 s with its ping latency.
-    // Only a genuinely new report should add a point to the sparkline.
+    // The server re-broadcasts each node every 10 s with its ping latency,
+    // and replays its stored registry on reconnect. Only a genuinely newer
+    // report should add a point to the sparkline.
     const history = previous?.cpuHistory || [];
-    device.cpuHistory = device.last_seen === previous?.last_seen
-        ? history
-        : [...history, device.cpu_usage ?? 0].slice(-HISTORY_POINTS);
+    device.cpuHistory = device.last_seen > (previous?.last_seen ?? -Infinity)
+        ? [...history, device.cpu_usage ?? 0].slice(-HISTORY_POINTS)
+        : history;
     device.alerts = previous?.alerts;
     nodes.set(device.hostname, device);
+}
+
+function dropNode(hostname) {
+    nodes.delete(hostname);
+    cards.get(hostname)?.el.remove();
+    cards.delete(hostname);
+    if (openHost === hostname) closeDrawer();
+    updateFleet();
+}
+
+async function forgetOpenNode() {
+    const hostname = openHost;
+    if (!hostname || !confirm(`Remove ${hostname} from the dashboard? `
+        + 'It comes back if its agent reports again.')) return;
+    try {
+        const response = await api(`/api/devices/${encodeURIComponent(hostname)}`, { method: 'DELETE' });
+        if (!response.ok && response.status !== 404) throw new Error(`responded ${response.status}`);
+        dropNode(hostname);
+    } catch (err) {
+        console.error('Removing node failed:', err);
+        toast('Could not remove node', { host: hostname, tone: 'crit' });
+    }
 }
 
 async function start() {
@@ -574,23 +599,30 @@ async function start() {
     });
 
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+    document.getElementById('drawer-forget').addEventListener('click', forgetOpenNode);
     drawer.querySelector('.drawer__scrim').addEventListener('click', closeDrawer);
     window.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && openHost) closeDrawer();
     });
 
     loadHistory('6h');
+    let reconnected = false;
 
     connectStream({
+        // Also sent on every reconnect, e.g. after a server restart. Merge it
+        // rather than starting over, which threw away every sparkline.
         init: (payload) => {
-            nodes.clear();
-            cards.forEach((entry) => entry.el.remove());
-            cards.clear();
+            const known = new Set(payload.map((device) => device.hostname));
+            [...nodes.keys()].filter((host) => !known.has(host)).forEach(dropNode);
             payload.forEach(ingest);
             nodes.forEach(updateCard);
             reorder();
             updateFleet();
+            // Points appended locally while the server was away are guesses.
+            if (reconnected) loadHistory(range);
+            reconnected = true;
         },
+        removed: ({ hostname }) => dropNode(hostname),
         metrics: (device) => {
             ingest(device);
             const stored = nodes.get(device.hostname);
