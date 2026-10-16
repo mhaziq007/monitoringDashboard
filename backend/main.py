@@ -29,6 +29,7 @@ app.add_middleware(
 # In-memory store for device metrics
 # Key: hostname, Value: device metrics dict
 devices: Dict[str, dict] = {}
+device_persist_lock = asyncio.Lock()
 
 # In-memory store for historical power draw (Last 6 hours)
 power_history: List[dict] = []
@@ -186,6 +187,11 @@ def save_devices_to_db(rows: List[tuple]):
         conn.close()
     except Exception as e:
         print(f"Error saving devices: {e}")
+
+async def persist_devices_snapshot():
+    """Persist one consistent snapshot; serialize full-table writes."""
+    async with device_persist_lock:
+        await asyncio.to_thread(save_devices_to_db, device_rows())
 
 def load_services_config():
     """Load services to monitor from services.json."""
@@ -383,7 +389,7 @@ async def record_power_history_loop():
                     print(f"Error writing power to db: {db_err}")
             
             await asyncio.to_thread(db_write)
-            await asyncio.to_thread(save_devices_to_db, device_rows())
+            await persist_devices_snapshot()
         except Exception as e:
             print(f"Error in power history loop: {e}")
 
@@ -417,7 +423,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     # The loop only saves once a minute; keep the latest reports on a restart.
-    save_devices_to_db(device_rows())
+    await persist_devices_snapshot()
 
 # Authentication & User Management Endpoints
 
@@ -584,7 +590,7 @@ async def forget_device(hostname: str, current_user: str = Depends(get_current_u
     """Drop a retired or renamed node. One still running an agent comes back."""
     if devices.pop(hostname, None) is None:
         raise HTTPException(status_code=404, detail="Unknown device")
-    await asyncio.to_thread(save_devices_to_db, device_rows())
+    await persist_devices_snapshot()
     await broadcast("removed", {"hostname": hostname})
     return {"status": "ok"}
 
