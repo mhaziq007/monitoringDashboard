@@ -66,6 +66,19 @@ export function uptime(seconds) {
     return `${m}m`;
 }
 
+/** Uptime for the narrow card tile: never more than six characters. */
+export function uptimeShort(seconds) {
+    if (!seconds) return '—';
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (d >= 10) return `${d}d`;
+    if (d > 0) return `${d}d ${h}h`;
+    if (h >= 10) return `${h}h`;
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m`;
+}
+
 export function watts(value) {
     if (!value) return '—';
     return `${value.toFixed(0)} W`;

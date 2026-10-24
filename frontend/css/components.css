@@ -271,9 +271,92 @@
     margin-top: 1px;
 }
 
-/* --- Power trend chart -------------------------------------------------- */
+/* --- History charts: lab power, then fleet load ------------------------- */
+.section-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--s-4);
+    padding-bottom: var(--s-3);
+}
+
+.section-head__title {
+    font-size: var(--t-14);
+    font-weight: 600;
+}
+
+.section-head__sub {
+    margin-top: 1px;
+    font-size: var(--t-11);
+    color: var(--fg-subtle);
+}
+
 .trend {
-    margin-bottom: var(--s-5);
+    margin-bottom: var(--s-4);
+}
+
+.load-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+    gap: var(--s-4);
+    padding-bottom: var(--s-5);
+}
+
+.load-grid .trend {
+    margin-bottom: 0;
+}
+
+.trend--small .trend__body {
+    height: 120px;
+}
+
+.trend__now {
+    font-size: var(--t-20);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.trend__now small {
+    font-size: var(--t-13);
+    font-weight: 500;
+    color: var(--fg-subtle);
+}
+
+/* Two series share the network chart, so it carries a key; the values beside
+   each swatch double as direct labels. */
+.legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--s-1) var(--s-3);
+    font-size: var(--t-12);
+    color: var(--fg-subtle);
+}
+
+.legend__item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.legend__item i,
+.trend__tip i {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+}
+
+.trend__tip i {
+    margin-right: 6px;
+}
+
+.legend__item b {
+    color: var(--fg);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
 }
 
 .trend__body {
@@ -311,7 +394,7 @@
 }
 
 .trend__tip b {
-    color: var(--m-power);
+    color: var(--fg);
     font-variant-numeric: tabular-nums;
 }
 

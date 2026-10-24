@@ -132,10 +132,15 @@ Stores total lab power wattage at 1-minute intervals.
 ```sql
 CREATE TABLE IF NOT EXISTS power_log (
     timestamp REAL,
-    power REAL
+    power REAL,
+    cpu REAL,       -- average CPU % across online nodes
+    mem REAL,       -- memory in use, % of the online nodes' combined total
+    net_down REAL,  -- combined throughput, bytes/s
+    net_up REAL
 );
 CREATE INDEX IF NOT EXISTS idx_power_log_timestamp ON power_log(timestamp);
 ```
+- **Fleet load columns**: Added after the table first shipped; `init_db()` adds any that are missing with `ALTER TABLE`, and older rows read as `NULL`. Unlike `power`, these include VMs.
 - **Pruning**: A background loop executes `DELETE FROM power_log WHERE timestamp < ?` every 60 seconds to purge entries older than **30 days** (2,592,000 seconds).
 
 #### `devices`
