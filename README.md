@@ -193,6 +193,7 @@ The dashboard server checks every node and service itself, so alerts fire with n
 | High CPU | Above 85% for 5 minutes | Below 75% |
 | CPU / GPU temperature | Above 80°C for 5 minutes | Below 72°C |
 | Disk | Over its threshold (90% unless set per disk) | 5 points below it, or its alert is switched off |
+| Container | A container that was running stops, keeps restarting or fails its health check, for 2 minutes | It stays up (and healthy) for a minute, or is removed |
 | Service down | Two failed probes in a row (about a minute) | It answers again |
 | Updates (daily) | Pending OS packages or container images, once a day at the chosen hour | — |
 

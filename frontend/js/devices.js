@@ -816,14 +816,15 @@ function containersSection(device) {
         // not be checked) waits in the tooltip.
         const sub = outdated ? `${c.image} · ${c.update_note}` : c.image;
         return `
-            <div class="ctr" data-state="${esc((c.state || '').toLowerCase())}" title="${esc(c.update_note || '')}">
+            <div class="ctr" data-state="${esc((c.state || '').toLowerCase())}" data-health="${esc(c.health || '')}"
+                title="${esc([c.status, c.update_note].filter(Boolean).join(' · '))}">
                 <span class="ctr__dot"></span>
                 <span class="ctr__main">
                     <span class="ctr__name">${esc(c.name)}</span>
                     ${sub ? `<span class="ctr__image">${esc(sub)}</span>` : ''}
                 </span>
                 ${outdated ? '<span class="ctr__update"><i class="fa-solid fa-circle-arrow-up"></i>Update</span>' : ''}
-                <span class="ctr__state">${esc(c.state)}</span>
+                <span class="ctr__state">${esc(c.state)}${c.health === 'unhealthy' ? ' · unhealthy' : ''}</span>
             </div>`;
     }).join('');
     return section('Containers', 'fa-cube', `<div class="ctr-list">${rows}</div>`,

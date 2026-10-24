@@ -30,6 +30,8 @@ DISK_CLEAR_GAP = 5       # a disk alert clears this many points below its thresh
 OFFLINE_AFTER = 180      # seconds without a report before a node counts as offline
 FRESH_WITHIN = 60        # a node's figures are only checked if it reported this recently
 SERVICE_FAILURES = 2     # consecutive failed probes (30 s apart) before a service counts as down
+CONTAINER_HELD = 120     # seconds a container must stay stopped, restarting or unhealthy before it alerts
+CONTAINER_STABLE = 60    # seconds a restarted container must stay up before it counts as fixed
 
 # ntfy priorities run 1 (min) to 5 (max).
 PRIORITY = {"crit": 4, "warn": 3, "resolved": 2, "digest": 2}
@@ -70,6 +72,7 @@ class AlertEngine:
         self.active: Dict[str, dict] = {}     # key -> alert that fired and has not resolved
         self.pending: Dict[str, float] = {}   # key -> when its condition started holding
         self.failures: Dict[str, int] = {}    # service name -> consecutive failed probes
+        self.ran: set = set()                 # container keys seen running since startup
 
     def restore(self, open_alerts: List[dict]):
         """Alerts still open in the log at startup: no second notification for them."""
@@ -180,9 +183,61 @@ class AlertEngine:
             # A disk that is no longer reported takes its alert with it.
             self._drop(events, now, lambda k, host=host, seen=seen: not k.startswith(f"disk:{host}:") or k in seen)
 
+            self._check_containers(events, now, host, device.get("docker_containers") or [])
+
         hosts = set(devices)
         self._drop(events, now, lambda k: k.startswith("service:") or k.split(":")[1] in hosts)
         return events
+
+    def _check_containers(self, events: List[Event], now: float, host: str, containers: List[dict]):
+        """A container that was seen running and then stops, keeps restarting
+        or fails its health check. Ones already stopped when first seen (old
+        or one-off containers) are left alone, as is a container being
+        recreated, which is back within CONTAINER_HELD."""
+        if not containers:
+            return   # usually docker did not answer this time: change nothing
+        present = set()
+        for c in containers:
+            name = c.get("name")
+            if not name:
+                continue
+            key = f"container:{host}:{name}"
+            present.add(key)
+            state, health, up = (c.get("state") or "").lower(), c.get("health"), c.get("uptime")
+            running = state == "running"
+            if running:
+                self.ran.add(key)
+            # Running again, but only briefly: still in trouble if it already was.
+            settling = running and isinstance(up, (int, float)) and up < CONTAINER_STABLE
+            if state in ("exited", "dead"):
+                problem = "stopped"
+            elif state == "restarting" or (settling and key in self.pending):
+                problem = "restarting"
+            elif running and health == "unhealthy":
+                problem = "unhealthy"
+            else:
+                problem = None
+            self._hold(
+                events, now, key, problem is not None and (key in self.ran or key in self.active),
+                running and health != "unhealthy" and not settling, CONTAINER_HELD,
+                fire=lambda name=name, problem=problem, c=c: {
+                    "kind": "container", "host": host, "problem": problem,
+                    "severity": "warn" if problem == "unhealthy" else "crit",
+                    "title": {"stopped": f"{host}: {name} stopped",
+                              "restarting": f"{host}: {name} keeps restarting",
+                              "unhealthy": f"{host}: {name} is unhealthy"}[problem],
+                    "message": {"stopped": f"Docker says: {c.get('status') or c.get('state')}.",
+                                "restarting": f"It has not stayed up for {duration(CONTAINER_HELD)}.",
+                                "unhealthy": f"Running, but failing its health check for "
+                                             f"{duration(CONTAINER_HELD)}."}[problem],
+                },
+                resolve=lambda alert, name=name: (
+                    f"{host}: {name} is healthy again" if alert.get("problem") == "unhealthy"
+                    else f"{host}: {name} is running again",
+                    f"Down for {duration(now - alert['started'] + CONTAINER_HELD)}."),
+            )
+        # A removed container takes its alert with it.
+        self._drop(events, now, lambda k: not k.startswith(f"container:{host}:") or k in present)
 
     def check_services(self, now: float, services: List[dict]) -> List[Event]:
         """Call once per probe round, after every service has been probed."""
