@@ -116,14 +116,25 @@ const STEP = { '6h': 60, '24h': 300, '7d': 1800, '30d': 7200 };
 const GAP_STEPS = 2.5;
 
 /**
- * Lab power over time, with a hover crosshair and readout.
+ * A time series over the selected range, with a hover crosshair and readout.
  * Returns a controller so the page can push new data and force redraws.
+ *
+ * opts.series   [{ key, label, color }]: one line per entry, read from each
+ *               point's `key`; a missing value breaks the line like a gap
+ * opts.axis     value -> left-gutter label
+ * opts.readout  value -> tooltip text
+ * opts.minPeak  smallest top of the auto-scaled axis, so a quiet series is
+ *               not magnified into noise
+ * opts.max      the axis never goes above this (100 for percentages)
  */
-export function createTrendChart(canvas, tip) {
+export function createTrendChart(canvas, tip, opts) {
+    const { series, axis, readout, minPeak = 0, max = Infinity } = opts;
     let points = [];
     let range = '6h';
     let hoverIndex = -1;
-    let peak = 50;
+    let peak = 1;
+
+    const valueOf = (p, s) => (typeof p[s.key] === 'number' ? p[s.key] : null);
 
     function geometry() {
         const width = canvas.clientWidth;
@@ -146,17 +157,18 @@ export function createTrendChart(canvas, tip) {
         };
     }
 
-    /** Split the series into runs with no gap inside them. */
-    function runs() {
+    /** Split one series into runs with no gap or missing value inside them. */
+    function runs(s) {
         const limit = STEP[range] * GAP_STEPS;
         const out = [];
         let run = [];
         points.forEach((p, i) => {
-            if (i > 0 && p.time - points[i - 1].time > limit) {
+            const broken = valueOf(p, s) === null || (i > 0 && p.time - points[i - 1].time > limit);
+            if (broken && run.length) {
                 out.push(run);
                 run = [];
             }
-            run.push(p);
+            if (valueOf(p, s) !== null) run.push(p);
         });
         if (run.length) out.push(run);
         return out;
@@ -168,7 +180,8 @@ export function createTrendChart(canvas, tip) {
         const { ctx, width, height } = box;
         const g = geometry();
 
-        if (points.length < 2) {
+        const values = points.flatMap((p) => series.map((s) => valueOf(p, s))).filter((v) => v !== null);
+        if (points.length < 2 || !values.length) {
             ctx.fillStyle = cssVar('--fg-faint');
             ctx.font = `500 12px ${cssVar('--font-ui') || 'Inter, sans-serif'}`;
             ctx.textAlign = 'center';
@@ -177,12 +190,12 @@ export function createTrendChart(canvas, tip) {
             return;
         }
 
-        peak = Math.max(50, ...points.map((p) => p.power)) * 1.12;
+        peak = Math.min(max, Math.max(minPeak, ...values) * 1.12) || 1;
         const { xAt } = g;
-        const yAt = (w) => PAD.top + g.plotH - (w / peak) * g.plotH;
+        const yAt = (v) => PAD.top + g.plotH - (v / peak) * g.plotH;
         const baseline = PAD.top + g.plotH;
 
-        // Horizontal grid with watt labels on the left gutter.
+        // Horizontal grid with value labels on the left gutter.
         ctx.strokeStyle = cssVar('--border');
         ctx.fillStyle = cssVar('--fg-faint');
         ctx.font = '500 10px Inter, sans-serif';
@@ -197,44 +210,47 @@ export function createTrendChart(canvas, tip) {
             ctx.moveTo(PAD.left, y);
             ctx.lineTo(width - PAD.right, y);
             ctx.stroke();
-            ctx.fillText(`${Math.round(value)}W`, PAD.left - 8, y);
+            ctx.fillText(axis(value), PAD.left - 8, y);
         }
 
-        const color = cssVar('--m-power');
-        const gradient = ctx.createLinearGradient(0, PAD.top, 0, baseline);
-        gradient.addColorStop(0, withAlpha(color, 0.2));
-        gradient.addColorStop(1, withAlpha(color, 0));
+        for (const s of series) {
+            const color = cssVar(s.color);
+            for (const run of runs(s)) {
+                if (run.length === 1) {
+                    // A lone sample between two gaps would otherwise be invisible.
+                    ctx.beginPath();
+                    ctx.arc(xAt(run[0].time), yAt(valueOf(run[0], s)), 2, 0, Math.PI * 2);
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                    continue;
+                }
 
-        for (const run of runs()) {
-            if (run.length === 1) {
-                // A lone sample between two gaps would otherwise be invisible.
+                // Area fill for a lone series only; overlapping fills of two
+                // series muddy each other.
+                if (series.length === 1) {
+                    const gradient = ctx.createLinearGradient(0, PAD.top, 0, baseline);
+                    gradient.addColorStop(0, withAlpha(color, 0.2));
+                    gradient.addColorStop(1, withAlpha(color, 0));
+                    ctx.beginPath();
+                    ctx.moveTo(xAt(run[0].time), baseline);
+                    run.forEach((p) => ctx.lineTo(xAt(p.time), yAt(valueOf(p, s))));
+                    ctx.lineTo(xAt(run[run.length - 1].time), baseline);
+                    ctx.closePath();
+                    ctx.fillStyle = gradient;
+                    ctx.fill();
+                }
+
                 ctx.beginPath();
-                ctx.arc(xAt(run[0].time), yAt(run[0].power), 2, 0, Math.PI * 2);
-                ctx.fillStyle = color;
-                ctx.fill();
-                continue;
+                run.forEach((p, i) => {
+                    if (i === 0) ctx.moveTo(xAt(p.time), yAt(valueOf(p, s)));
+                    else ctx.lineTo(xAt(p.time), yAt(valueOf(p, s)));
+                });
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1.75;
+                ctx.lineJoin = 'round';
+                ctx.lineCap = 'round';
+                ctx.stroke();
             }
-
-            // Area fill, closed down to the baseline at both ends of the run.
-            ctx.beginPath();
-            ctx.moveTo(xAt(run[0].time), baseline);
-            run.forEach((p) => ctx.lineTo(xAt(p.time), yAt(p.power)));
-            ctx.lineTo(xAt(run[run.length - 1].time), baseline);
-            ctx.closePath();
-            ctx.fillStyle = gradient;
-            ctx.fill();
-
-            // Trend line.
-            ctx.beginPath();
-            run.forEach((p, i) => {
-                if (i === 0) ctx.moveTo(xAt(p.time), yAt(p.power));
-                else ctx.lineTo(xAt(p.time), yAt(p.power));
-            });
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1.75;
-            ctx.lineJoin = 'round';
-            ctx.lineCap = 'round';
-            ctx.stroke();
         }
 
         // Time axis: four labels evenly spaced in time across the window.
@@ -248,10 +264,10 @@ export function createTrendChart(canvas, tip) {
             ctx.fillText(timeLabel(time, range), xAt(time), height - PAD.bottom + 8);
         });
 
-        // Hover crosshair.
+        // Hover crosshair, with a ringed dot on every series that has a value.
         if (hoverIndex >= 0 && hoverIndex < points.length) {
-            const x = xAt(points[hoverIndex].time);
-            const y = yAt(points[hoverIndex].power);
+            const p = points[hoverIndex];
+            const x = xAt(p.time);
             ctx.strokeStyle = cssVar('--border-strong');
             ctx.lineWidth = 1;
             ctx.beginPath();
@@ -259,13 +275,17 @@ export function createTrendChart(canvas, tip) {
             ctx.lineTo(Math.round(x) + 0.5, baseline);
             ctx.stroke();
 
-            ctx.beginPath();
-            ctx.arc(x, y, 3.5, 0, Math.PI * 2);
-            ctx.fillStyle = color;
-            ctx.fill();
-            ctx.strokeStyle = cssVar('--surface-1');
-            ctx.lineWidth = 2;
-            ctx.stroke();
+            for (const s of series) {
+                const v = valueOf(p, s);
+                if (v === null) continue;
+                ctx.beginPath();
+                ctx.arc(x, yAt(v), 3.5, 0, Math.PI * 2);
+                ctx.fillStyle = cssVar(s.color);
+                ctx.fill();
+                ctx.strokeStyle = cssVar('--surface-1');
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
         }
     }
 
@@ -295,9 +315,16 @@ export function createTrendChart(canvas, tip) {
         }
 
         const p = points[index];
-        tip.innerHTML = `<b>${p.power.toFixed(0)} W</b><br><span>${fullLabel(p.time, range)}</span>`;
+        const present = series.filter((s) => valueOf(p, s) !== null);
+        // One series needs no key; with several, a swatch names each value.
+        const rows = series.length === 1
+            ? present.map((s) => `<b>${readout(valueOf(p, s))}</b>`)
+            : present.map((s) => `<i style="background:${cssVar(s.color)}"></i>${s.label} <b>${readout(valueOf(p, s))}</b>`);
+        tip.innerHTML = `${rows.join('<br>') || '<b>No data</b>'}<br><span>${fullLabel(p.time, range)}</span>`;
+
+        const top = Math.max(0, ...present.map((s) => valueOf(p, s)));
         tip.style.left = `${g.xAt(p.time)}px`;
-        tip.style.top = `${PAD.top + g.plotH - (p.power / peak) * g.plotH - 10}px`;
+        tip.style.top = `${PAD.top + g.plotH - (top / peak) * g.plotH - 10}px`;
         tip.classList.add('is-visible');
     }
 
@@ -321,7 +348,6 @@ export function createTrendChart(canvas, tip) {
             points = all.filter((p) => p.time >= end - SPAN[range]);
             draw();
         },
-        get points() { return points; },
         redraw: draw,
     };
 }

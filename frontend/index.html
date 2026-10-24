@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0a0a0d">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Devices · HomeLab</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -81,17 +84,25 @@
         </div>
     </div>
 
+    <!-- One range selector scopes every chart below it. -->
+    <div class="section-head">
+        <div>
+            <h2 class="section-head__title">History</h2>
+            <p class="section-head__sub" id="trend-sub">Last 6 hours</p>
+        </div>
+        <div class="segmented" id="range-selector">
+            <button type="button" class="is-active" data-range="6h">6H</button>
+            <button type="button" data-range="24h">24H</button>
+            <button type="button" data-range="7d">7D</button>
+            <button type="button" data-range="30d">30D</button>
+        </div>
+    </div>
+
     <section class="panel trend">
         <div class="panel__head">
             <div>
                 <div class="panel__title">Power draw</div>
-                <div class="panel__sub" id="trend-sub">Last 6 hours</div>
-            </div>
-            <div class="segmented" id="range-selector">
-                <button type="button" class="is-active" data-range="6h">6H</button>
-                <button type="button" data-range="24h">24H</button>
-                <button type="button" data-range="7d">7D</button>
-                <button type="button" data-range="30d">30D</button>
+                <div class="panel__sub">Physical nodes; VMs are left out</div>
             </div>
         </div>
         <div class="trend__body">
@@ -99,6 +110,51 @@
             <div class="trend__tip" id="trend-tip"></div>
         </div>
     </section>
+
+    <div class="load-grid">
+        <section class="panel trend trend--small">
+            <div class="panel__head">
+                <div>
+                    <div class="panel__title">CPU</div>
+                    <div class="panel__sub" id="load-cpu-sub">Average across online nodes</div>
+                </div>
+                <div class="trend__now" id="load-cpu">—</div>
+            </div>
+            <div class="trend__body">
+                <canvas class="trend__canvas" id="cpu-canvas"></canvas>
+                <div class="trend__tip" id="cpu-tip"></div>
+            </div>
+        </section>
+        <section class="panel trend trend--small">
+            <div class="panel__head">
+                <div>
+                    <div class="panel__title">Memory</div>
+                    <div class="panel__sub" id="load-mem-sub">In use across online nodes</div>
+                </div>
+                <div class="trend__now" id="load-mem">—</div>
+            </div>
+            <div class="trend__body">
+                <canvas class="trend__canvas" id="mem-canvas"></canvas>
+                <div class="trend__tip" id="mem-tip"></div>
+            </div>
+        </section>
+        <section class="panel trend trend--small">
+            <div class="panel__head">
+                <div>
+                    <div class="panel__title">Network</div>
+                    <div class="panel__sub">Total across online nodes</div>
+                </div>
+                <div class="legend">
+                    <span class="legend__item"><i style="background: var(--m-down)"></i>Down <b id="load-down">—</b></span>
+                    <span class="legend__item"><i style="background: var(--m-up)"></i>Up <b id="load-up">—</b></span>
+                </div>
+            </div>
+            <div class="trend__body">
+                <canvas class="trend__canvas" id="net-canvas"></canvas>
+                <div class="trend__tip" id="net-tip"></div>
+            </div>
+        </section>
+    </div>
 
     <div class="node-grid" id="node-grid">
         <div class="empty" id="node-empty">

@@ -250,8 +250,14 @@ Drops a retired or renamed node from the dashboard and from the stored registry.
 
 ---
 
-### 3.4 Power Draw History
-Returns time-series lab power wattage downsampled based on the requested window.
+### 3.4 Power Draw & Fleet Load History
+Returns time-series lab power and fleet load, downsampled based on the requested window. Each point carries:
+- `power`: watts drawn by online physical nodes (VMs excluded).
+- `cpu`: average CPU % across online nodes.
+- `mem`: memory in use across online nodes, as a % of their combined total.
+- `net_down` / `net_up`: combined network throughput of online nodes, bytes/s.
+
+The load fields are `null` where nothing was recorded, including every sample taken before the server first recorded them.
 
 - **Endpoint**: `GET /api/power-history`
 - **Auth Required**: Yes (`Bearer <token>`)
@@ -265,9 +271,9 @@ Returns time-series lab power wattage downsampled based on the requested window.
 - **Success Response**: `200 OK`
 ```json
 [
-  { "time": 1725163200.0, "power": 38.2 },
-  { "time": 1725163500.0, "power": 41.5 },
-  { "time": 1725163800.0, "power": 39.0 }
+  { "time": 1725163200.0, "power": 38.2, "cpu": 14.1, "mem": 36.2, "net_down": 2457600.0, "net_up": 128000.0 },
+  { "time": 1725163500.0, "power": 41.5, "cpu": 18.9, "mem": 36.4, "net_down": 1310720.0, "net_up": 96000.0 },
+  { "time": 1725163800.0, "power": 39.0, "cpu": null, "mem": null, "net_down": null, "net_up": null }
 ]
 ```
 
