@@ -449,6 +449,25 @@ Lists the chats that recently messaged the bot, so the chat ID can be picked ins
 ```
 or `{ "chats": [], "error": "Telegram rejected the bot token" }`. An empty list means nobody has messaged the bot recently (Telegram keeps these for about a day).
 
+### 3.10 Check-ins
+Backups and scheduled jobs that report in. Each has a secret ping URL; the server alerts when a check-in is late (no ping for `every` + `grace` seconds, counting from when it was added until its first ping) or when a job reports a failure.
+
+- **Endpoints**: `GET /api/checkins`, `POST /api/checkins`, `PUT /api/checkins/{id}` and `DELETE /api/checkins/{id}`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **POST body**: `{ "name": "Backup to OCI", "every": 86400, "grace": 3600 }`. `name` is 1-60 characters, `every` 60 seconds to 31 days, `grace` 60 seconds to 7 days. A PUT takes any of the three. Invalid values get `400`, an unknown id `404`.
+- **Response**: the check-in (a list of them for GET):
+```json
+{ "id": 1, "name": "Backup to OCI", "token": "k3Jx9...", "every": 86400, "grace": 3600, "created": 1792832400.0,
+  "last_ping": 1792900000.0, "last_status": "ok", "last_note": "", "state": "ok" }
+```
+`state` is `new` (no ping yet, not due), `ok`, `late` or `failed`; `last_note` holds a failure's message.
+
+#### Ping
+- **Endpoints**: `GET`, `POST` or `HEAD` on `/ping/{token}` for success, `/ping/{token}/fail` for a failure
+- **Auth Required**: No; the token is the key.
+- **Body** (`/fail` only, optional): plain text, up to 500 characters kept, shown in the alert.
+- **Response**: `OK`, or `404` for an unknown token.
+
 ---
 
 ## 4. Real-Time Streaming (SSE)

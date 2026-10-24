@@ -121,6 +121,47 @@
         <p class="empty__title">No services configured</p>
         <p class="empty__sub">Add entries to <code>backend/services.json</code> and restart the dashboard server to start probing them.</p>
     </div>
+
+    <!-- Backups and scheduled jobs that call a ping URL (js/checkins.js). -->
+    <div class="section-head">
+        <div>
+            <h2 class="section-head__title">Check-ins</h2>
+            <p class="section-head__sub">Backups and scheduled jobs that report in; a late or failed one alerts</p>
+        </div>
+        <div class="section-head__tools">
+            <button type="button" class="btn btn--quiet btn--small" id="checkin-add">
+                <i class="fa-solid fa-plus"></i>Add a check-in
+            </button>
+        </div>
+    </div>
+
+    <form class="panel checkin-form" id="checkin-form" autocomplete="off" hidden>
+        <div class="field">
+            <label for="checkin-name">Name</label>
+            <input type="text" id="checkin-name" maxlength="60" required placeholder="Backup to OCI">
+        </div>
+        <div class="field">
+            <label for="checkin-every">Runs every</label>
+            <select id="checkin-every"></select>
+        </div>
+        <div class="field">
+            <label for="checkin-grace">Alert when this late</label>
+            <select id="checkin-grace"></select>
+        </div>
+        <button type="submit" class="btn">Add</button>
+    </form>
+
+    <div class="checkin-list" id="checkin-list"></div>
+    <p class="checkin-help">
+        A job calls its ping URL when it finishes, and <code>/fail</code> on the end when it fails; a failure's
+        request body (the end of a log, say) goes into the alert. For example:
+        <code>backup.sh &amp;&amp; curl -fsS -m 10 --retry 3 URL || curl -fsS -m 10 --data-raw "$(tail -5 backup.log)" URL/fail</code>
+    </p>
+    <div class="empty" id="checkin-empty" hidden>
+        <span class="empty__icon"><i class="fa-solid fa-clock-rotate-left"></i></span>
+        <p class="empty__title">No check-ins yet</p>
+        <p class="empty__sub">Add one for each backup or cron job; you get an alert if it stops reporting in.</p>
+    </div>
 </main>
 
 <footer class="foot">

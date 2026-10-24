@@ -171,6 +171,18 @@ CREATE INDEX IF NOT EXISTS idx_alert_log_started ON alert_log(started);
 - **Pruning**: Entries older than 90 days.
 - Notification settings live in the `settings` table under `notifications`.
 
+#### `checkins`
+Backups and scheduled jobs that report in (`backend/checkins.py`): one row each, holding its secret ping token, schedule and last ping. Late or failed ones raise a `checkin` alert in `alert_log`.
+```sql
+CREATE TABLE IF NOT EXISTS checkins (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT, token TEXT UNIQUE,
+    every INTEGER, grace INTEGER,          -- seconds
+    created REAL, last_ping REAL,
+    last_status TEXT, last_note TEXT       -- "ok" or "fail", and a failure's message
+);
+```
+
 #### `node_log`
 Each online node's own load, one row a minute, for its history charts (large cards and the detail drawer).
 ```sql
