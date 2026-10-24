@@ -235,12 +235,25 @@
     gap: var(--s-4);
     padding-bottom: var(--s-12);
     align-content: start;
-    /* A large card that does not fit the rest of a row moves down; dense
-       lets the next normal cards fill the hole it leaves. */
+    /* Cards are placed in the order the user arranged them; dense lets a
+       later card fill a hole an earlier, wider one left behind. */
     grid-auto-flow: dense;
     /* Cards keep their own height; a large card beside a normal one would
        otherwise stretch it into a mostly empty box. */
     align-items: start;
+}
+
+/* Packing: rows are 4px tall and devices.js sets each card's row span from
+   its height (ROW_UNIT), so short cards stack beside a tall one. The row gap
+   moves onto each card, which its span then includes. Left alone while the
+   board is empty so the empty state keeps normal rows. */
+.node-grid:has(> .node) {
+    grid-auto-rows: 4px;
+    row-gap: 0;
+}
+
+.node-grid > .node {
+    margin-bottom: var(--s-4);
 }
 
 .service-group {

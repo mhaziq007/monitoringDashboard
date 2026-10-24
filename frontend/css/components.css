@@ -726,6 +726,24 @@
     overflow: hidden;
 }
 
+/* --- Rearranging -------------------------------------------------------- */
+.node__grip {
+    cursor: grab;
+    touch-action: none;     /* on touch screens a drag moves the card, not the page */
+}
+
+.node.is-dragging {
+    opacity: 0.55;
+    outline: 2px dashed var(--accent-line);
+    outline-offset: 2px;
+}
+
+body.is-arranging,
+body.is-arranging * {
+    cursor: grabbing !important;
+    user-select: none;
+}
+
 /* --- Card sizes ----------------------------------------------------------
    Large spans two columns and carries the drawer's content inline; compact
    keeps only the head and meters. */
