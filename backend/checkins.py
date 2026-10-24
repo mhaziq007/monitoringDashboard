@@ -55,6 +55,13 @@ def list_all(db_path: str, now: float) -> List[dict]:
     return checks
 
 
+def get(db_path: str, check_id: int) -> Optional[dict]:
+    conn = sqlite3.connect(db_path)
+    found = _rows(conn, "WHERE id = ?", (check_id,))
+    conn.close()
+    return found[0] if found else None
+
+
 def create(db_path: str, name: str, every: int, grace: int, now: float) -> dict:
     conn = sqlite3.connect(db_path)
     with conn:

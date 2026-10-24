@@ -107,6 +107,7 @@
             <div class="alert-list" id="history-list"></div>
         </div>
 
+        <div class="alerts-side">
         <form class="panel settings" id="notify-form" autocomplete="off">
             <div class="panel__head">
                 <div>
@@ -179,6 +180,33 @@
                 </div>
             </div>
         </form>
+
+        <section class="panel settings" aria-labelledby="backup-title">
+            <div class="panel__head">
+                <div>
+                    <div class="panel__title" id="backup-title">Dashboard backup</div>
+                    <div class="panel__sub">This dashboard's database (history, settings and tokens), copied to another node every night.</div>
+                </div>
+            </div>
+            <div class="settings__body">
+                <p class="backup__status" id="backup-status">Loading…</p>
+                <details class="backup__setup" id="backup-setup">
+                    <summary>Set up the node that keeps the copies</summary>
+                    <ol class="channel__steps">
+                        <li>On that node (e.g. <b>haziq-apu2</b>), update the checkout: <code>sudo ./scripts/update.sh</code></li>
+                        <li>From the same folder, run:</li>
+                    </ol>
+                    <pre class="backup__command" id="backup-command"></pre>
+                    <div class="backup__actions">
+                        <button type="button" class="link-btn link-btn--quiet" id="backup-copy">Copy the command</button>
+                        <button type="button" class="link-btn" id="backup-rotate">Make a new key</button>
+                    </div>
+                    <p class="field__hint">Its agent then saves a copy each night after 03:00 (and right away if today's is missing), keeps 14, and reports here. A failed or missing backup alerts like a late check-in. To restore, stop the dashboard, unzip a copy over <code>backend/history.db</code> and start it again.</p>
+                </details>
+                <button type="button" class="btn btn--quiet" id="backup-download">Download a backup now</button>
+            </div>
+        </section>
+        </div>
     </div>
 </main>
 

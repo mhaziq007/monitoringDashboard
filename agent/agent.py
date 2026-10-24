@@ -11,6 +11,8 @@ import urllib.request
 import urllib.error
 import psutil
 
+from backup import Backup
+
 # Configuration. The install script writes these into an environment file
 # (/etc/homelab-agent.env on Linux) so this source file stays identical on
 # every node and can be updated with a plain git pull.
@@ -813,6 +815,9 @@ def main():
     print(f"Starting Enhanced Home Lab Dashboard Agent...")
     print(f"Target Server: {SERVER_URL}")
     print(f"Node type: {'virtual machine' if state.is_vm else 'physical'} ({reason})")
+    backup = Backup(SERVER_URL)
+    if backup.enabled:
+        print(f"Dashboard backups: into {backup.directory} each day after {backup.hour}:00, keeping {backup.keep}")
     print(f"Press Ctrl+C to exit.")
     
     while True:
@@ -825,6 +830,7 @@ def main():
             
             if success:
                 print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] Metrics sent successfully.")
+            backup.maybe_start()
             
             # Account for processing time
             elapsed = time.time() - start_time

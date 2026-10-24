@@ -6,6 +6,7 @@ import { connectStream } from './stream.js';
 import { api, getJson } from './api.js';
 import { toast } from './toast.js';
 import { esc, uptime } from './format.js';
+import { startBackupPanel, loadBackup } from './backup-panel.js';
 
 let active = [];
 let history = [];
@@ -19,6 +20,9 @@ const ICONS = {
     disk: 'fa-hard-drive',
     service: 'fa-globe',
     digest: 'fa-box-open',
+    mem: 'fa-memory',
+    container: 'fa-cube',
+    checkin: 'fa-clock-rotate-left',
 };
 
 const $ = (id) => document.getElementById(id);
@@ -253,6 +257,7 @@ async function start() {
     $('telegram-find').addEventListener('click', findChats);
     $('telegram-chats').addEventListener('change', (event) => { $('telegram-chat').value = event.target.value; });
 
+    startBackupPanel();
     await Promise.all([loadAlerts(), loadSettings()]);
 
     connectStream({
@@ -263,6 +268,7 @@ async function start() {
             render();
             loadAlerts();
             loadSettings();
+            loadBackup();   // a backup report changes its check-in's alert
         },
     });
 

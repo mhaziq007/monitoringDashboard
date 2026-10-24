@@ -10,9 +10,11 @@ import urllib.request
 from typing import Dict, List
 from fastapi import FastAPI, Request, Header, Query, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
+import backups
 import checkins
 import alerting
 import mutes
@@ -1011,6 +1013,56 @@ async def checkin_ping(token: str, request: Request, outcome: str = "ok"):
         raise HTTPException(status_code=404, detail="Unknown check-in")
     await check_checkins_now()   # a failure alerts now, not at the next check
     return PlainTextResponse("OK\n")
+
+# --- Backups of this database (backups.py) -------------------------------------
+
+_snapshot_lock = asyncio.Lock()
+
+def _backup_caller(request: Request) -> bool:
+    """The backup key (a node's agent), or a signed-in browser."""
+    if backups.key_matches(DB_PATH, request.headers.get("X-Backup-Key")):
+        return True
+    authorization = request.headers.get("Authorization") or ""
+    return authorization.startswith("Bearer ") and bool(verify_session_token(authorization[7:]))
+
+@app.get("/api/backup")
+async def get_backup(current_user: str = Depends(get_current_user)):
+    return await asyncio.to_thread(backups.status, DB_PATH)
+
+@app.post("/api/backup/key")
+async def rotate_backup_key(current_user: str = Depends(get_current_user)):
+    """A new backup key; the node keeping backups needs it before its next run."""
+    await asyncio.to_thread(backups.key, DB_PATH, True)
+    return await asyncio.to_thread(backups.status, DB_PATH)
+
+@app.get("/api/backup/snapshot")
+async def backup_snapshot(request: Request):
+    """A gzipped, integrity-checked copy of the database, with its SHA-256 in
+    X-Backup-SHA256 so the receiver can check the download."""
+    if not _backup_caller(request):
+        raise HTTPException(status_code=401, detail="Wrong or missing backup key")
+    async with _snapshot_lock:   # one at a time: each reads the whole database
+        try:
+            path, digest, size = await asyncio.to_thread(
+                backups.snapshot, DB_PATH, os.path.join(os.path.dirname(DB_PATH), ".backup-tmp"))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Could not make a snapshot: {e}")
+    return FileResponse(path, media_type="application/gzip",
+                        filename=f"homelab-dashboard-{time.strftime('%Y-%m-%d')}.db.gz",
+                        headers={"X-Backup-SHA256": digest},
+                        background=BackgroundTask(os.remove, path))
+
+@app.post("/api/backup/report")
+async def backup_report(payload: dict, request: Request):
+    """How a node's backup went: {"ok": true, "detail": "...", "host": "haziq-apu2"}."""
+    if not backups.key_matches(DB_PATH, request.headers.get("X-Backup-Key")):
+        raise HTTPException(status_code=401, detail="Wrong or missing backup key")
+    ok, detail, host = payload.get("ok"), payload.get("detail", ""), payload.get("host")
+    if not isinstance(ok, bool) or not isinstance(detail, str) or not isinstance(host, str) or not host.strip():
+        raise HTTPException(status_code=400, detail='Send "ok" (true or false), "detail" and "host"')
+    await asyncio.to_thread(backups.record, DB_PATH, ok, detail.strip(), host.strip(), time.time())
+    await check_checkins_now()   # a failed backup alerts now
+    return {"status": "ok"}
 
 @app.get("/api/auth/agent-key")
 async def get_agent_key_endpoint(current_user: str = Depends(get_current_user)):

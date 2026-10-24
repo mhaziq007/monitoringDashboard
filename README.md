@@ -210,6 +210,16 @@ backup.sh && curl -fsS -m 10 --retry 3 http://192.168.0.107:8000/ping/<token> \
 ```
 If no ping arrives in time you get "<name> is late"; a `/fail` ping alerts at once, with whatever the job sent in the request body (the end of its log, above). The next successful ping resolves it. The URL's token is its only key, so treat it like a password.
 
+### Backing up the dashboard
+
+Everything the dashboard knows (history, settings, notification tokens, logins) is one SQLite file, `backend/history.db`. Another node's agent can keep nightly copies of it, so losing the dashboard's disk loses nothing. On the node that keeps them (e.g. `haziq-apu2`), after `sudo ./scripts/update.sh`:
+```bash
+sudo ./scripts/install-agent.sh --backup-dir /var/backups/homelab-dashboard --backup-key <key>
+```
+The command, with the backup key filled in, is under **Dashboard backup** on the Alerts page. Each night after 03:00 (and straight away if today's copy is missing) the agent downloads a snapshot, checks its checksum and that it is a readable database, keeps the newest 14 as `homelab-dashboard-YYYY-MM-DD.db.gz`, and reports back. The reports feed a built-in check-in, *Dashboard backup to <node>*, so a failed backup alerts at once and a missing one after 26 hours. The backup key only reads snapshots; the shared agent key cannot. `--backup-dir none` turns it off, and **Download a backup now** saves a copy from the browser.
+
+To restore: stop the dashboard (`sudo systemctl stop homelab-dashboard`), unzip a copy over the database (`gunzip -c homelab-dashboard-2026-10-24.db.gz > backend/history.db`), and start it again.
+
 ---
 
 ## 🛠️ Configuration & Tunables

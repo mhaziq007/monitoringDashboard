@@ -1631,6 +1631,62 @@ body.is-arranging * {
     color: var(--crit);
 }
 
+/* The settings column: notifications, then the dashboard backup. */
+.alerts-side {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+    min-width: 0;
+}
+
+.backup__status {
+    font-size: var(--t-12);
+    line-height: 1.5;
+    color: var(--fg-muted);
+    overflow-wrap: anywhere;
+}
+
+.backup__status[data-tone='ok'] { color: var(--ok); }
+.backup__status[data-tone='crit'] { color: var(--crit); }
+
+.backup__setup summary {
+    cursor: pointer;
+    font-size: var(--t-12);
+    font-weight: 550;
+    color: var(--fg-muted);
+}
+
+.backup__setup[open] summary {
+    margin-bottom: var(--s-2);
+}
+
+.backup__setup code,
+.backup__command {
+    font-family: var(--font-mono);
+    font-size: var(--t-10);
+}
+
+.backup__command {
+    margin: var(--s-2) 0;
+    padding: var(--s-2) var(--s-3);
+    background: var(--surface-inset);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
+.backup__actions {
+    display: flex;
+    gap: var(--s-4);
+    margin-bottom: var(--s-2);
+}
+
+.link-btn--quiet {
+    color: var(--accent);
+}
+
 .settings__actions {
     display: flex;
     gap: var(--s-2);
