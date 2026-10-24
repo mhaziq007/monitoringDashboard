@@ -170,6 +170,14 @@ python agent.py
 ```
 Within 5 seconds, the node will appear dynamically on your dashboard grid.
 
+### 3. Updating
+
+After changes are merged, run this on each node (the dashboard server and every agent):
+```bash
+sudo ./scripts/update.sh
+```
+It pulls, updates Python packages, and restarts whichever of `homelab-dashboard` and `homelab-agent` runs there, even when there was nothing new to pull, so a service never keeps running old code after an earlier `git pull`. `--branch <name>` tries a branch before it is merged. If the server is running older code than its checkout, the dashboard shows a banner saying so.
+
 ---
 
 ## 🔔 Alerts & Notifications

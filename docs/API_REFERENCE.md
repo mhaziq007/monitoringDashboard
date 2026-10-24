@@ -21,6 +21,10 @@ The API implements two layers of authentication:
 
 ## 2. Authentication Endpoints
 
+### 2.0 Server Version
+- **Endpoint**: `GET /api/version` (no auth)
+- **Response**: `{ "running": "879888c", "installed": "194dd94", "stale": true }`: the commit the server started with and the one its checkout is on now. `stale` means it needs a restart; both are `""` when the server does not run from a git checkout.
+
 ### 2.1 Check Registration Status
 Returns whether an administrator account has already been registered.
 

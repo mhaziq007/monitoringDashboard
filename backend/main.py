@@ -16,6 +16,33 @@ from fastapi.staticfiles import StaticFiles
 import alerting
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def read_git_commit() -> str:
+    """The checkout's current commit, read from .git without running git
+    (the service user may not be the checkout's owner). "" when unknown."""
+    git_dir = os.path.join(REPO_ROOT, ".git")
+    try:
+        with open(os.path.join(git_dir, "HEAD")) as f:
+            head = f.read().strip()
+        if not head.startswith("ref: "):
+            return head   # detached HEAD
+        ref = head[5:]
+        ref_path = os.path.join(git_dir, ref)
+        if os.path.exists(ref_path):
+            with open(ref_path) as f:
+                return f.read().strip()
+        with open(os.path.join(git_dir, "packed-refs")) as f:
+            for line in f:
+                if line.rstrip().endswith(" " + ref):
+                    return line.split()[0]
+    except OSError:
+        pass
+    return ""
+
+# The code this process started with. A `git pull` without a restart moves
+# the checkout (and so the pages it serves) ahead of it.
+RUNNING_COMMIT = read_git_commit()
 
 app = FastAPI(title="Home Lab Dashboard API")
 
@@ -584,6 +611,16 @@ async def shutdown_event():
     await persist_devices_snapshot()
 
 # Authentication & User Management Endpoints
+
+@app.get("/api/version")
+async def get_version():
+    """Commits running and installed; "stale" means the server needs a restart."""
+    installed = read_git_commit()
+    return {
+        "running": RUNNING_COMMIT[:7],
+        "installed": installed[:7],
+        "stale": bool(RUNNING_COMMIT and installed and RUNNING_COMMIT != installed),
+    }
 
 @app.get("/api/auth/status")
 async def auth_status():

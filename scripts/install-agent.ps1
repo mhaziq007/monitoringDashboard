@@ -178,6 +178,13 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
     -Principal $principal -Settings $settings -Force | Out-Null
 
+# Stop an agent that is already running first: with MultipleInstances
+# IgnoreNew a second start is ignored, which would leave the old code running.
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like '*agent.py*' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
 Start-ScheduledTask -TaskName $TaskName
 Start-Sleep -Seconds 8
 

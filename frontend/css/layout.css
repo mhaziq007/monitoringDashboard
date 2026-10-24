@@ -423,3 +423,29 @@ main {
         text-align: center;
     }
 }
+
+/* --- Stale server banner (js/shell.js) ----------------------------------- */
+.stale-banner {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-2);
+    padding: var(--s-2) var(--gutter);
+    background: var(--warn-quiet);
+    border-bottom: 1px solid var(--warn-line);
+    font-size: var(--t-12);
+    color: var(--fg);
+    text-align: center;
+}
+
+.stale-banner i {
+    color: var(--warn);
+}
+
+.stale-banner code {
+    font-family: var(--font-mono);
+    font-size: var(--t-11);
+    padding: 1px 5px;
+    border-radius: var(--r-sm);
+    background: var(--surface-3);
+}
