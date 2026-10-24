@@ -179,7 +179,7 @@ Within 5 seconds, the node will appear dynamically on your dashboard grid.
 - **Card Sizes**: The size button on each node card cycles **normal → large → compact**. A large card spans two columns and shows the node's history charts, disks, network, GPU and containers inline; a compact one keeps only its meters. Sizes are remembered per browser.
 - **Monitored Services**: Edit `backend/services.json` to add or remove self-hosted web applications.
 - **Hostname Icons**: Extend the heuristic table in `frontend/js/format.js` (`deviceIcon()`) to assign custom icons based on hostname regex patterns.
-- **Theme & Colors**: Modify the CSS custom properties in `frontend/css/tokens.css` to retheme the entire dashboard.
+- **Theme & Colors**: The topbar button cycles **Auto → Light → Dark** (Auto follows your system; the choice is remembered per browser). Both themes are CSS custom properties in `frontend/css/tokens.css`: the dark values on `:root`, the light ones under `:root[data-theme='light']`.
 
 ---
 

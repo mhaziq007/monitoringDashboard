@@ -112,6 +112,66 @@
     --drawer-w:    460px;
 }
 
+/* --- Light theme ---------------------------------------------------------
+   Chosen from the topbar, or by the system when the choice is Auto (see
+   js/theme.js). Each colour is its own step, picked for a light surface
+   rather than inverted from the dark one. The metric hues were checked for
+   colour-blind separation and 3:1 contrast against white. */
+:root[data-theme='light'] {
+    color-scheme: light;
+
+    --bg:              #f6f7f9;
+    --bg-subtle:       #f1f2f5;
+    --surface-1:       #ffffff;
+    --surface-2:       #f8f9fb;
+    --surface-3:       #eceef2;
+    --surface-hover:   #f3f4f7;
+    --surface-inset:   rgba(15, 23, 42, 0.03);
+
+    --border:          #e2e4ea;
+    --border-strong:   #cdd1d9;
+    --border-subtle:   rgba(15, 23, 42, 0.06);
+
+    --fg:              #15171c;
+    --fg-muted:        #4a4f5c;
+    --fg-subtle:       #676c79;
+    --fg-faint:        #868b97;
+
+    --accent:          #4f46e5;
+    --accent-hover:    #6366f1;
+    --accent-quiet:    rgba(79, 70, 229, 0.1);
+    --accent-line:     rgba(79, 70, 229, 0.3);
+
+    --ok:              #1a7f37;
+    --ok-quiet:        rgba(26, 127, 55, 0.1);
+    --ok-line:         rgba(26, 127, 55, 0.3);
+
+    --warn:            #9a6700;
+    --warn-quiet:      rgba(154, 103, 0, 0.1);
+    --warn-line:       rgba(154, 103, 0, 0.3);
+
+    --crit:            #cf222e;
+    --crit-quiet:      rgba(207, 34, 46, 0.08);
+    --crit-line:       rgba(207, 34, 46, 0.3);
+
+    --off:             #8c919c;
+    --off-quiet:       rgba(140, 145, 156, 0.14);
+    --off-line:        rgba(140, 145, 156, 0.3);
+
+    --m-cpu:           #0550ae;
+    --m-ram:           #bf5af2;
+    --m-gpu:           #d03a73;
+    --m-vram:          #bf5af2;
+    --m-disk:          #0891b2;
+    --m-power:         #946200;
+    --m-down:          #0891b2;
+    --m-up:            #bf5af2;
+
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+    --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.1);
+    --shadow-lg: -24px 0 60px rgba(15, 23, 42, 0.18);
+}
+
 @media (max-width: 900px) {
     :root {
         --gutter: 16px;

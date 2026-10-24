@@ -511,7 +511,7 @@
 
 .service__bar i[data-state='partial'] { background: var(--warn); }
 .service__bar i[data-state='down']    { background: var(--crit); }
-.service__bar i[data-state='none']    { background: var(--surface-3); }
+.service__bar i[data-state='none']    { background: var(--border-strong); }
 
 .service[data-state='offline'] .service__name {
     color: var(--fg-muted);

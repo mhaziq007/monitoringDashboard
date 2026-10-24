@@ -923,14 +923,16 @@ async function start() {
         if (openHost) renderDrawer();
     }, 5000);
 
-    window.addEventListener('resize', () => {
+    const redrawSparklines = () => {
         nodes.forEach((device) => {
             const entry = cards.get(device.hostname);
             if (entry && device.cpuHistory?.length > 1) {
                 drawSparkline(entry.ref.cpuSpark, device.cpuHistory, '--m-cpu');
             }
         });
-    });
+    };
+    window.addEventListener('resize', redrawSparklines);
+    window.addEventListener('themechange', redrawSparklines);
 }
 
 start();

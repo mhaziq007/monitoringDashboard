@@ -4,6 +4,16 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0a0a0d">
+<script>
+    // Apply the saved theme before first paint; js/theme.js handles changes.
+    try {
+        var choice = localStorage.getItem('theme');
+        document.documentElement.dataset.theme = choice === 'light' || choice === 'dark' ? choice
+            : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    } catch (e) {
+        document.documentElement.dataset.theme = 'dark';
+    }
+</script>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -37,6 +47,9 @@
             <button class="key-chip" id="agent-key" type="button" title="Copy the agent auth key" hidden>
                 <i class="fa-solid fa-key"></i>
                 <span class="key-chip__value" id="agent-key-value">——</span>
+            </button>
+            <button class="icon-btn" id="theme-btn" type="button" title="Theme" aria-label="Theme">
+                <i class="fa-solid fa-circle-half-stroke"></i>
             </button>
             <div class="link-state" id="link-state" data-state="idle">
                 <span class="link-state__dot"></span><span class="link-state__label">Connecting</span>
