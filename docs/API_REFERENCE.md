@@ -392,18 +392,43 @@ Active alerts (raised by the server and not yet resolved) and the last 100 entri
 ```json
 {
   "ntfy": { "enabled": true, "url": "http://192.168.0.105:7070/homelab", "token": "tk_..." },
+  "telegram": { "enabled": true, "token": "123456789:AA...", "chat_id": "123456789" },
   "click_url": "http://192.168.0.107:8000/alerts.html",
   "digest_hour": 9
 }
 ```
-`url` is the topic URL. An absent or `null` `token` keeps the stored one and `""` removes it. `digest_hour` is 0-23, or `null` for no daily summary. Invalid values get `400`.
-- **Response** (both): the settings without the token, `{ "ntfy": { "url", "enabled", "has_token" }, "click_url", "digest_hour", "status" }`, where `status` is the outcome of the last delivery, `{ "ok", "at", "error" }`, or `null`.
+`url` is the ntfy topic URL. For either channel, an absent or `null` `token` keeps the stored one and `""` removes it. A Telegram `token` must look like one from @BotFather (`<digits>:<letters>`), and `chat_id` is a number (negative for groups), an `@channelname`, or `""`. `digest_hour` is 0-23, or `null` for no daily summary. Invalid values get `400`.
+- **Response** (both): the settings without the tokens:
+```json
+{
+  "ntfy": { "url": "...", "enabled": true, "has_token": false },
+  "telegram": { "chat_id": "123456789", "enabled": true, "has_token": true },
+  "click_url": "...",
+  "digest_hour": 9,
+  "status": {
+    "ntfy": { "ok": false, "at": 1792832764.5, "error": "ntfy is unreachable (...)" },
+    "telegram": { "ok": true, "at": 1792832764.6, "error": "" }
+  }
+}
+```
+`status` holds the outcome of each channel's last delivery; a channel that has not sent anything yet is missing from it.
 
 ### 3.8 Send a Test Notification
 - **Endpoint**: `POST /api/notifications/test`
 - **Auth Required**: Yes (`Bearer <token>`)
-- **Body**: `{ "url": "...", "token": "..." }`, both optional; missing ones fall back to the saved settings, so a topic can be tried before saving.
-- **Response**: `{ "ok": true }`, or `{ "ok": false, "error": "ntfy is unreachable (...)" }`.
+- **Body**: `{ "channel": "ntfy", "url": "...", "token": "..." }` or `{ "channel": "telegram", "token": "...", "chat_id": "..." }`. `channel` defaults to `"ntfy"`; the other fields are optional, and missing ones fall back to the saved settings, so a channel can be tried before saving.
+- **Response**: `{ "ok": true }`, or `{ "ok": false, "error": "Telegram rejected the bot token" }`. `400` if the channel is unknown or not set up enough to try.
+
+### 3.9 Find Telegram Chats
+Lists the chats that recently messaged the bot, so the chat ID can be picked instead of looked up.
+- **Endpoint**: `POST /api/notifications/telegram/chats`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **Body**: `{ "token": "..." }`, optional; falls back to the saved bot token (`400` if there is none).
+- **Response**: newest first,
+```json
+{ "chats": [ { "id": "123456789", "name": "Alex", "type": "private" }, { "id": "-1001234", "name": "Homelab", "type": "group" } ] }
+```
+or `{ "chats": [], "error": "Telegram rejected the bot token" }`. An empty list means nobody has messaged the bot recently (Telegram keeps these for about a day).
 
 ---
 

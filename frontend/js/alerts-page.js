@@ -1,4 +1,4 @@
-/* Alerts page: what the server has raised, its history, and the ntfy settings. */
+/* Alerts page: what the server has raised, its history, and where it sends them. */
 
 import { ensureAuthenticated } from './auth.js';
 import { mountShell } from './shell.js';
@@ -80,21 +80,31 @@ function render() {
     renderDelivery();
 }
 
+const CHANNEL_NAMES = { ntfy: 'ntfy', telegram: 'Telegram' };
+
+const channelReady = (name) => {
+    const c = settings[name];
+    return c.enabled && (name === 'ntfy' ? Boolean(c.url) : Boolean(c.has_token && c.chat_id));
+};
+
 function renderDelivery() {
     if (!settings) return;
-    const on = settings.ntfy.enabled && settings.ntfy.url;
-    const last = settings.status;
-    $('stat-delivery').textContent = on ? 'On' : 'Off';
-    $('stat-delivery-card').dataset.tone = !on ? '' : last && !last.ok ? 'crit' : 'ok';
-    $('stat-delivery-foot').textContent = !on ? 'Set up ntfy below'
-        : !last ? 'Nothing sent yet'
-            : last.ok ? `Last sent ${when(last.at)}` : `Last send failed ${when(last.at)}`;
+    const ready = Object.keys(CHANNEL_NAMES).filter(channelReady);
+    const outcomes = ready.map((name) => settings.status?.[name]).filter(Boolean);
+    const failed = ready.filter((name) => settings.status?.[name] && !settings.status[name].ok);
+    const latest = Math.max(0, ...outcomes.map((o) => o.at));
 
-    const status = $('notify-status');
-    status.hidden = !(last && !last.ok);
-    if (last && !last.ok) {
-        status.textContent = `Last delivery failed: ${last.error}`;
-        status.dataset.tone = 'crit';
+    $('stat-delivery').textContent = ready.length ? ready.map((n) => CHANNEL_NAMES[n]).join(' + ') : 'Off';
+    $('stat-delivery-card').dataset.tone = !ready.length ? '' : failed.length ? 'crit' : 'ok';
+    $('stat-delivery-foot').textContent = !ready.length ? 'Set up a channel below'
+        : failed.length ? `${failed.map((n) => CHANNEL_NAMES[n]).join(' and ')} failed last time`
+            : latest ? `Last sent ${when(latest)}` : 'Nothing sent yet';
+
+    for (const name of Object.keys(CHANNEL_NAMES)) {
+        const last = settings.status?.[name];
+        const line = $(`${name}-status`);
+        line.hidden = !(last && !last.ok);
+        if (last && !last.ok) line.textContent = `Last delivery failed ${when(last.at)}: ${last.error}`;
     }
 }
 
@@ -110,12 +120,18 @@ async function loadAlerts() {
 /* --- Settings form ------------------------------------------------------ */
 
 function fillForm() {
-    $('ntfy-enabled').checked = settings.ntfy.enabled;
-    $('ntfy-url').value = settings.ntfy.url;
-    $('ntfy-token').value = '';
-    $('ntfy-token').placeholder = settings.ntfy.has_token
-        ? 'A token is saved; type a new one to replace it' : 'Only if the topic needs one';
-    $('ntfy-token-clear').hidden = !settings.ntfy.has_token;
+    const { ntfy, telegram } = settings;
+    $('ntfy-enabled').checked = ntfy.enabled;
+    $('ntfy-url').value = ntfy.url;
+    $('telegram-enabled').checked = telegram.enabled;
+    $('telegram-chat').value = telegram.chat_id;
+    $('telegram-chats').hidden = true;
+    for (const [name, empty] of [['ntfy', 'Only if the topic needs one'], ['telegram', '123456789:AA...']]) {
+        $(`${name}-token`).value = '';
+        $(`${name}-token`).placeholder = settings[name].has_token
+            ? 'A token is saved; type a new one to replace it' : empty;
+        $(`${name}-token-clear`).hidden = !settings[name].has_token;
+    }
     $('click-url').value = settings.click_url;
     $('click-url').placeholder = `${window.location.origin}/alerts.html`;
     $('digest-hour').value = settings.digest_hour === null ? 'off' : String(settings.digest_hour);
@@ -142,15 +158,21 @@ async function send(path, method, body) {
     return data;
 }
 
+const typed = (id) => $(id).value.trim();
+
 async function save(event) {
     event.preventDefault();
     const hour = $('digest-hour').value;
-    const token = $('ntfy-token').value.trim();
     try {
         settings = await send('/api/settings/notifications', 'PUT', {
             // A blank token field keeps the saved token.
-            ntfy: { enabled: $('ntfy-enabled').checked, url: $('ntfy-url').value.trim(), token: token || null },
-            click_url: $('click-url').value.trim(),
+            ntfy: { enabled: $('ntfy-enabled').checked, url: typed('ntfy-url'), token: typed('ntfy-token') || null },
+            telegram: {
+                enabled: $('telegram-enabled').checked,
+                chat_id: typed('telegram-chat'),
+                token: typed('telegram-token') || null,
+            },
+            click_url: typed('click-url'),
             digest_hour: hour === 'off' ? null : Number(hour),
         });
         fillForm();
@@ -160,29 +182,56 @@ async function save(event) {
     }
 }
 
-async function clearToken() {
+async function clearToken(name) {
     try {
-        settings = await send('/api/settings/notifications', 'PUT', { ntfy: { token: '' } });
+        settings = await send('/api/settings/notifications', 'PUT', { [name]: { token: '' } });
         fillForm();
-        toast('Saved token removed', { tone: 'ok' });
+        toast(`Saved ${CHANNEL_NAMES[name]} token removed`, { tone: 'ok' });
     } catch (err) {
         toast(`Could not remove the token: ${err.message}`, { tone: 'crit' });
     }
 }
 
-async function sendTest() {
-    const button = $('notify-test');
+/** Tests what is typed, saved or not; blank fields fall back to the saved settings. */
+async function sendTest(name) {
+    const button = $(`${name}-test`);
     button.disabled = true;
+    const body = name === 'ntfy'
+        ? { channel: 'ntfy', url: typed('ntfy-url'), token: typed('ntfy-token') || null }
+        : { channel: 'telegram', chat_id: typed('telegram-chat'), token: typed('telegram-token') || null };
     try {
-        // Tests what is typed, saved or not, so a URL can be tried before saving.
-        const result = await send('/api/notifications/test', 'POST', {
-            url: $('ntfy-url').value.trim(),
-            token: $('ntfy-token').value.trim() || null,
-        });
-        toast(result.ok ? 'Test sent. Check the ntfy app.' : `Test failed: ${result.error}`,
-            { tone: result.ok ? 'ok' : 'crit' });
+        const result = await send('/api/notifications/test', 'POST', body);
+        toast(result.ok ? `Test sent. Check ${name === 'ntfy' ? 'the ntfy app' : 'Telegram'}.`
+            : `Test failed: ${result.error}`, { tone: result.ok ? 'ok' : 'crit' });
     } catch (err) {
         toast(`Test failed: ${err.message}`, { tone: 'crit' });
+    } finally {
+        button.disabled = false;
+    }
+}
+
+/** Lists the chats that recently messaged the bot, so the ID is picked, not looked up. */
+async function findChats() {
+    const button = $('telegram-find');
+    const picker = $('telegram-chats');
+    button.disabled = true;
+    try {
+        const { chats, error } = await send('/api/notifications/telegram/chats', 'POST',
+            { token: typed('telegram-token') || null });
+        if (error) throw new Error(error);
+        if (!chats.length) {
+            toast('No chats yet: send your bot a message in Telegram, then try again.', { tone: 'warn' });
+            picker.hidden = true;
+            return;
+        }
+        $('telegram-chat').value = chats[0].id;
+        picker.innerHTML = chats.map((c) =>
+            `<option value="${esc(c.id)}">${esc(c.name)}${c.type && c.type !== 'private' ? ` (${esc(c.type)})` : ''} · ${esc(c.id)}</option>`).join('');
+        picker.hidden = chats.length < 2;
+        toast(chats.length > 1 ? 'Pick your chat from the list, then save.' : `Found ${chats[0].name}. Save to keep it.`,
+            { tone: 'ok' });
+    } catch (err) {
+        toast(`Could not read the bot's chats: ${err.message}`, { tone: 'crit' });
     } finally {
         button.disabled = false;
     }
@@ -197,8 +246,12 @@ async function start() {
         .map((h) => `<option value="${h}">${String(h).padStart(2, '0')}:00</option>`);
     $('digest-hour').innerHTML = `<option value="off">Off</option>${hours.join('')}`;
     $('notify-form').addEventListener('submit', save);
-    $('notify-test').addEventListener('click', sendTest);
-    $('ntfy-token-clear').addEventListener('click', clearToken);
+    for (const name of Object.keys(CHANNEL_NAMES)) {
+        $(`${name}-test`).addEventListener('click', () => sendTest(name));
+        $(`${name}-token-clear`).addEventListener('click', () => clearToken(name));
+    }
+    $('telegram-find').addEventListener('click', findChats);
+    $('telegram-chats').addEventListener('change', (event) => { $('telegram-chat').value = event.target.value; });
 
     await Promise.all([loadAlerts(), loadSettings()]);
 

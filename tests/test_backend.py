@@ -117,3 +117,55 @@ def test_fleet_load_counts_vms_and_weights_memory():
     assert load["mem"] == pytest.approx(100 * 9 / 64)   # used over total, not a mean of 75% and 10%
     assert (load["net_down"], load["net_up"]) == (150, 15)
     assert main.fleet_load([]) == {"cpu": None, "mem": None, "net_down": None, "net_up": None}
+
+
+TG_TOKEN = "123456789:AAH-test_token"
+
+
+def test_telegram_settings_validate_and_never_return_the_token(client):
+    put = lambda body: client.put("/api/settings/notifications", json=body)
+    assert put({"telegram": {"token": "abc"}}).status_code == 400
+    assert put({"telegram": {"chat_id": "my chat"}}).status_code == 400
+    assert put({"telegram": {"enabled": "yes"}}).status_code == 400
+    saved = put({"telegram": {"enabled": True, "token": TG_TOKEN, "chat_id": " 42 "}}).json()
+    assert saved["telegram"] == {"chat_id": "42", "enabled": True, "has_token": True}
+    assert TG_TOKEN not in client.get("/api/settings/notifications").text
+    # A null token keeps the saved one; "" removes it.
+    assert put({"telegram": {"token": None, "chat_id": "-1001"}}).json()["telegram"]["has_token"] is True
+    assert put({"telegram": {"token": ""}}).json()["telegram"] == {"chat_id": "-1001", "enabled": True,
+                                                                     "has_token": False}
+
+
+def test_telegram_test_uses_the_saved_token_and_reports_failures(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(main.alerting, "telegram_send", lambda *a: sent.append(a))
+    test = lambda body: client.post("/api/notifications/test", json=body)
+    assert test({"channel": "telegram"}).status_code == 400          # nothing saved yet
+    assert test({"channel": "email"}).status_code == 400
+    client.put("/api/settings/notifications", json={"telegram": {"token": TG_TOKEN, "chat_id": "42"}})
+    assert test({"channel": "telegram", "token": None, "chat_id": "-1001"}).json() == {"ok": True}
+    assert sent[-1][:2] == (TG_TOKEN, "-1001")
+
+    def refuse(*a):
+        raise RuntimeError("Telegram rejected the bot token")
+    monkeypatch.setattr(main.alerting, "telegram_send", refuse)
+    assert test({"channel": "telegram"}).json() == {"ok": False, "error": "Telegram rejected the bot token"}
+
+
+def test_one_failing_channel_never_stops_the_other(client, monkeypatch):
+    import asyncio
+    client.put("/api/settings/notifications", json={
+        "ntfy": {"enabled": True, "url": "http://192.168.0.105:7070/homelab"},
+        "telegram": {"enabled": True, "token": TG_TOKEN, "chat_id": "42"}})
+    delivered = []
+
+    def send(settings, channel, title, message, tone):
+        if channel == "ntfy":
+            raise RuntimeError("connection refused")
+        delivered.append((channel, title))
+    monkeypatch.setattr(main.alerting, "send", send)
+    asyncio.run(main.deliver("nas is offline", "No report.", "crit"))
+    assert delivered == [("telegram", "nas is offline")]
+    status = client.get("/api/settings/notifications").json()["status"]
+    assert status["ntfy"]["ok"] is False and status["ntfy"]["error"] == "connection refused"
+    assert status["telegram"]["ok"] is True

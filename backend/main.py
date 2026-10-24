@@ -542,19 +542,21 @@ async def update_notification_settings(change) -> dict:
         return await asyncio.to_thread(apply)
 
 async def deliver(title: str, message: str, tone: str):
-    """Send to every enabled channel (ntfy so far) and keep the outcome for the UI."""
+    """Send to every enabled channel; one failing never stops the others.
+    Each channel's outcome is kept for the Alerts page."""
     settings = await asyncio.to_thread(alerting.read_settings, DB_PATH)
-    ntfy = settings["ntfy"]
-    if not (ntfy["enabled"] and ntfy["url"]):
-        return
-    try:
-        await asyncio.to_thread(alerting.ntfy_publish, ntfy["url"], ntfy["token"],
-                                title, message, tone, settings["click_url"])
-        outcome = alerting.now_status(True)
-    except Exception as e:
-        print(f"Notification failed: {e}")
-        outcome = alerting.now_status(False, str(e))
-    await update_notification_settings(lambda s: s.update(status=outcome))
+    outcomes = {}
+    for channel in alerting.CHANNELS:
+        if not alerting.channel_ready(settings, channel):
+            continue
+        try:
+            await asyncio.to_thread(alerting.send, settings, channel, title, message, tone)
+            outcomes[channel] = alerting.now_status(True)
+        except Exception as e:
+            print(f"{channel} notification failed: {e}")
+            outcomes[channel] = alerting.now_status(False, str(e))
+    if outcomes:
+        await update_notification_settings(lambda s: s["status"].update(outcomes))
 
 async def handle_alert_events(events: List[tuple]):
     if not events:
@@ -802,14 +804,24 @@ def _is_http_url(value) -> bool:
 
 @app.put("/api/settings/notifications")
 async def set_notification_settings(payload: dict, current_user: str = Depends(get_current_user)):
-    """Update the fields present. An ntfy token of null (or absent) keeps the stored one; "" clears it."""
+    """Update the fields present. A token of null (or absent) keeps the stored one; "" clears it."""
     ntfy = payload.get("ntfy") or {}
+    telegram = payload.get("telegram") or {}
     if "url" in ntfy and not _is_http_url(ntfy["url"]):
         raise HTTPException(status_code=400, detail="The ntfy URL must start with http:// or https://")
     if ntfy.get("token") is not None and not isinstance(ntfy["token"], str):
         raise HTTPException(status_code=400, detail="The ntfy token must be text")
-    if "enabled" in ntfy and not isinstance(ntfy["enabled"], bool):
-        raise HTTPException(status_code=400, detail="enabled must be true or false")
+    for channel in (ntfy, telegram):
+        if "enabled" in channel and not isinstance(channel["enabled"], bool):
+            raise HTTPException(status_code=400, detail="enabled must be true or false")
+    tg_token = telegram.get("token")
+    if tg_token is not None and not (isinstance(tg_token, str)
+                                     and (tg_token.strip() == "" or alerting.TELEGRAM_TOKEN.match(tg_token.strip()))):
+        raise HTTPException(status_code=400, detail="That does not look like a bot token from @BotFather")
+    if "chat_id" in telegram and not (isinstance(telegram["chat_id"], str)
+                                      and (telegram["chat_id"].strip() == ""
+                                           or alerting.TELEGRAM_CHAT.match(telegram["chat_id"].strip()))):
+        raise HTTPException(status_code=400, detail="The chat ID should be a number such as 123456789")
     if "click_url" in payload and not _is_http_url(payload["click_url"]):
         raise HTTPException(status_code=400, detail="The dashboard link must start with http:// or https://")
     hour = payload.get("digest_hour", "unset")
@@ -822,6 +834,12 @@ async def set_notification_settings(payload: dict, current_user: str = Depends(g
                 settings["ntfy"][field] = ntfy[field].strip() if field == "url" else ntfy[field]
         if ntfy.get("token") is not None:
             settings["ntfy"]["token"] = ntfy["token"].strip()
+        if "enabled" in telegram:
+            settings["telegram"]["enabled"] = telegram["enabled"]
+        if "chat_id" in telegram:
+            settings["telegram"]["chat_id"] = telegram["chat_id"].strip()
+        if tg_token is not None:
+            settings["telegram"]["token"] = tg_token.strip()
         if "click_url" in payload:
             settings["click_url"] = payload["click_url"].strip()
         if hour != "unset":
@@ -829,20 +847,53 @@ async def set_notification_settings(payload: dict, current_user: str = Depends(g
 
     return alerting.public_settings(await update_notification_settings(change))
 
+def _typed_or_saved(payload: dict, field: str, saved: str) -> str:
+    value = payload.get(field)
+    return value.strip() if isinstance(value, str) and value.strip() else saved
+
 @app.post("/api/notifications/test")
 async def send_test_notification(payload: dict, current_user: str = Depends(get_current_user)):
-    """Send a test to the given topic URL (or the saved one), using the saved token unless one is given."""
+    """Send a test to one channel ("ntfy" unless "channel" says "telegram"). Values
+    typed into the form are used, unsaved; anything left blank falls back to the
+    saved settings, the token included."""
     settings = await asyncio.to_thread(alerting.read_settings, DB_PATH)
-    url = (payload.get("url") or settings["ntfy"]["url"]).strip()
-    token = payload["token"] if isinstance(payload.get("token"), str) and payload["token"] else settings["ntfy"]["token"]
-    if not url:
-        raise HTTPException(status_code=400, detail="Set the ntfy topic URL first")
+    channel = payload.get("channel", "ntfy")
+    title, message = "Test from HomeLab Monitor", "Alerts from your dashboard will arrive here."
     try:
-        await asyncio.to_thread(alerting.ntfy_publish, url, token, "Test from HomeLab Monitor",
-                                "Alerts from your dashboard will arrive here.", "resolved", settings["click_url"])
+        if channel == "telegram":
+            saved = settings["telegram"]
+            token = _typed_or_saved(payload, "token", saved["token"])
+            chat_id = _typed_or_saved(payload, "chat_id", saved["chat_id"])
+            if not token or not chat_id:
+                raise HTTPException(status_code=400, detail="Enter the bot token and pick a chat first")
+            await asyncio.to_thread(alerting.telegram_send, token, chat_id, title, message, "resolved",
+                                    settings["click_url"])
+        elif channel == "ntfy":
+            url = _typed_or_saved(payload, "url", settings["ntfy"]["url"])
+            if not url:
+                raise HTTPException(status_code=400, detail="Set the ntfy topic URL first")
+            token = _typed_or_saved(payload, "token", settings["ntfy"]["token"])
+            await asyncio.to_thread(alerting.ntfy_publish, url, token, title, message, "resolved",
+                                    settings["click_url"])
+        else:
+            raise HTTPException(status_code=400, detail='channel must be "ntfy" or "telegram"')
+    except HTTPException:
+        raise
     except Exception as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True}
+
+@app.post("/api/notifications/telegram/chats")
+async def find_telegram_chats(payload: dict, current_user: str = Depends(get_current_user)):
+    """Chats that recently messaged the bot (typed token, or the saved one)."""
+    settings = await asyncio.to_thread(alerting.read_settings, DB_PATH)
+    token = _typed_or_saved(payload, "token", settings["telegram"]["token"])
+    if not token:
+        raise HTTPException(status_code=400, detail="Enter the bot token first")
+    try:
+        return {"chats": await asyncio.to_thread(alerting.telegram_chats, token)}
+    except Exception as e:
+        return {"chats": [], "error": str(e)}
 
 @app.get("/api/auth/agent-key")
 async def get_agent_key_endpoint(current_user: str = Depends(get_current_user)):

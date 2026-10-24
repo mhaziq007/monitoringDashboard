@@ -182,7 +182,10 @@ It pulls, updates Python packages, and restarts whichever of `homelab-dashboard`
 
 ## 🔔 Alerts & Notifications
 
-The dashboard server checks every node and service itself, so alerts fire with no browser open, and sends them to your phone through [ntfy](https://ntfy.sh). Set it up on the **Alerts** page: tick *Send alerts to ntfy*, enter your topic URL (e.g. `http://192.168.0.105:7070/homelab`) and, if the topic needs one, an access token, then **Send a test**. Subscribe to the same topic in the ntfy app.
+The dashboard server checks every node and service itself, so alerts fire with no browser open, and sends them to your phone through [ntfy](https://ntfy.sh), Telegram, or both. Set them up on the **Alerts** page; each channel has its own **Send a test** button.
+
+- **ntfy**: tick *Send alerts to ntfy*, enter your topic URL (e.g. `http://192.168.0.105:7070/homelab`) and, if the topic needs one, an access token. Subscribe to the same topic in the ntfy app.
+- **Telegram**: message [@BotFather](https://t.me/BotFather), send `/newbot` and copy the token it gives you. Paste it into *Bot token*, send your new bot any message, then click **Find my chat** and pick your chat. Tick *Send alerts to Telegram* and save. Resolutions and the daily summary arrive silently; new alerts notify.
 
 | Alert | Fires when | Resolves when |
 |---|---|---|
@@ -193,7 +196,7 @@ The dashboard server checks every node and service itself, so alerts fire with n
 | Service down | Two failed probes in a row (about a minute) | It answers again |
 | Updates (daily) | Pending OS packages or container images, once a day at the chosen hour | — |
 
-Every alert and its resolution goes to ntfy and into the history on the Alerts page. The settings, including the token, are stored on the dashboard server; the token is never sent back to a browser. Telegram is planned as a second channel.
+Every alert and its resolution goes to each channel switched on, and into the history on the Alerts page. If one channel fails, the others still deliver, and the Alerts page shows which one failed and why. The settings, including the tokens, are stored on the dashboard server; tokens are never sent back to a browser.
 
 ---
 
