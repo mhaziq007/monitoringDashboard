@@ -7,6 +7,8 @@ import { getJson } from './api.js';
 import { esc, slug, latencyTone } from './format.js';
 
 let services = [];
+let uptime = {};       // name -> { uptime, slots, slot_seconds } for the selected range
+let range = '24h';
 
 const root = document.getElementById('service-groups');
 const empty = document.getElementById('service-empty');
@@ -66,9 +68,11 @@ function render() {
             .sort((a, b) => a.name.localeCompare(b.name))
             .map((service) => {
                 const state = service.online ? 'online' : 'offline';
-                const meta = service.online
+                const history = uptime[service.name];
+                const meta = (service.online
                     ? `<span data-tone="${latencyTone(service.latency)}">${service.latency.toFixed(0)} ms</span>`
-                    : 'No response';
+                    : 'No response')
+                    + (history ? ` · <span data-tone="${uptimeTone(history.uptime)}">${uptimePct(history.uptime)} up</span>` : '');
                 return `
                     <article class="service" data-state="${state}" id="svc-${slug(service.name)}">
                         <span class="service__icon"><i class="fa-solid ${esc(service.icon || 'fa-globe')}"></i></span>
@@ -77,6 +81,7 @@ function render() {
                             <div class="service__meta">${meta}</div>
                         </div>
                         <span class="status" data-state="${state}"><i class="status__dot"></i></span>
+                        ${history ? uptimeBar(history) : ''}
                     </article>`;
             }).join('');
 
@@ -90,6 +95,42 @@ function render() {
                 <div class="service-grid">${cards}</div>
             </section>`;
     }).join('');
+}
+
+const uptimePct = (pct) => (pct >= 99.995 ? '100%' : `${pct.toFixed(pct >= 99 ? 2 : 1)}%`);
+const uptimeTone = (pct) => (pct < 95 ? 'crit' : pct < 99 ? 'warn' : '');
+
+function slotTime(seconds) {
+    const d = new Date(seconds * 1000);
+    const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    return range === '24h' ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+/** One block per slot, oldest first: answered every probe, some, or none. */
+function uptimeBar(history) {
+    const blocks = history.slots.map((slot) => {
+        if (!slot) return '<i data-state="none" title="No data"></i>';
+        const state = slot.up >= 0.999 ? 'up' : slot.up >= 0.9 ? 'partial' : 'down';
+        const title = `${slotTime(slot.start)} – ${slotTime(slot.start + history.slot_seconds)} · `
+            + `${Math.round(slot.up * 100)}% up${slot.latency != null ? ` · ${slot.latency.toFixed(0)} ms` : ''}`;
+        return `<i data-state="${state}" title="${esc(title)}"></i>`;
+    });
+    return `<div class="service__bar">${blocks.join('')}</div>`;
+}
+
+async function loadUptime(nextRange = range) {
+    range = nextRange;
+    document.querySelectorAll('#uptime-range button').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.dataset.range === range);
+    });
+    document.getElementById('uptime-sub').textContent =
+        { '24h': 'Last 24 hours', '7d': 'Last 7 days', '30d': 'Last 30 days' }[range];
+    try {
+        uptime = await getJson(`/api/services/history?range=${range}`);
+        render();
+    } catch (err) {
+        console.error('Uptime request failed:', err);
+    }
 }
 
 function apply(payload) {
@@ -108,6 +149,13 @@ async function start() {
     } catch (err) {
         console.error('Initial services request failed:', err);
     }
+
+    document.getElementById('uptime-range').addEventListener('click', (event) => {
+        const btn = event.target.closest('button');
+        if (btn) loadUptime(btn.dataset.range);
+    });
+    loadUptime();
+    setInterval(loadUptime, 60000);
 
     connectStream({
         services_init: apply,

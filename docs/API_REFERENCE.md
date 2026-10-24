@@ -292,6 +292,29 @@ The load fields are `null` where nothing was recorded, including every sample ta
 
 ---
 
+### 3.5a Services Uptime History
+Uptime per service over a range, from the `service_log` table (one row per probe, every 30 seconds).
+
+- **Endpoint**: `GET /api/services/history?range=24h|7d|30d`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **Success Response**: `200 OK`, keyed by service name:
+```json
+{
+  "Jellyfin": {
+    "uptime": 99.93,
+    "slot_seconds": 1800,
+    "slots": [
+      { "start": 1792735622.6, "up": 1.0, "latency": 6.2 },
+      null,
+      { "start": 1792739222.6, "up": 0.95, "latency": 7.9 }
+    ]
+  }
+}
+```
+`slots` always has 48 entries, oldest first; `up` is the share of probes answered and `latency` the mean of the answered ones. A slot with no probes is `null`.
+
+---
+
 ### 3.5 Services Status
 Returns the list of monitored self-hosted web applications with reachability and latency. Internal URLs are sanitized and never exposed.
 

@@ -56,6 +56,17 @@ def init_db():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_power_log_timestamp ON power_log(timestamp)")
+        # Every service probe (one row per service every 30 s), for uptime.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS service_log (
+                name TEXT,
+                timestamp REAL,
+                online INTEGER,
+                latency REAL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_service_log_time ON service_log(timestamp)")
+
         # Each online node's own load, one row a minute, for its history charts.
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS node_log (
@@ -447,13 +458,34 @@ async def record_power_history_loop():
         except Exception as e:
             print(f"Error in power history loop: {e}")
 
+def record_service_checks(rows: List[tuple], prune_before: float = None):
+    """Store one round of probes, and drop rounds older than 30 days when asked."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        with conn:
+            conn.executemany("INSERT INTO service_log (name, timestamp, online, latency) VALUES (?, ?, ?, ?)", rows)
+            if prune_before is not None:
+                conn.execute("DELETE FROM service_log WHERE timestamp < ?", (prune_before,))
+        conn.close()
+    except Exception as e:
+        print(f"Error writing service checks: {e}")
+
 async def check_services_loop():
     """Background task to query services status every 30 seconds."""
+    last_prune = 0.0
     while True:
         try:
             tasks = [ping_service(s) for s in services_list]
             if tasks:
                 await asyncio.gather(*tasks)
+                now = time.time()
+                rows = [(s["name"], now, int(s.get("online", False)), s.get("latency") or None)
+                        for s in services_list]
+                # Pruning scans the table, so once an hour is plenty.
+                prune = now - 30 * 86400 if now - last_prune > 3600 else None
+                if prune is not None:
+                    last_prune = now
+                await asyncio.to_thread(record_service_checks, rows, prune)
             
             sanitized = get_sanitized_services()
             await broadcast("services", sanitized)
@@ -718,6 +750,47 @@ async def get_power_history(range: str = "6h", current_user: str = Depends(get_c
         except Exception as query_err:
             print(f"Error querying power history database: {query_err}")
             return []
+
+    return await asyncio.to_thread(fetch_data)
+
+# Window per uptime range; each is split into this many slots for the bar.
+SERVICE_RANGES = {"24h": 86400, "7d": 604800, "30d": 2592000}
+SERVICE_SLOTS = 48
+
+@app.get("/api/services/history")
+async def get_services_history(range: str = "24h", current_user: str = Depends(get_current_user)):
+    """Uptime per service over a range: an overall percentage plus one entry per
+    slot (share of probes answered and mean latency of the answered ones).
+    A slot with no probes is null, e.g. while the dashboard server was down."""
+    span = SERVICE_RANGES.get(range, SERVICE_RANGES["24h"])
+    slot = span / SERVICE_SLOTS
+    start = time.time() - span
+
+    def fetch_data():
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("""
+            SELECT name, MIN(CAST((timestamp - ?) / ? AS INTEGER), ?) AS i,
+                   SUM(online), COUNT(*), AVG(CASE WHEN online THEN latency END)
+            FROM service_log
+            WHERE timestamp >= ?
+            GROUP BY name, i
+        """, (start, slot, SERVICE_SLOTS - 1, start)).fetchall()
+        conn.close()
+
+        out = {}
+        for name, i, up, total, latency in rows:
+            entry = out.setdefault(name, {"slots": [None] * SERVICE_SLOTS, "up": 0, "total": 0})
+            entry["slots"][i] = {
+                "start": start + i * slot,
+                "up": up / total,
+                "latency": round(latency, 1) if latency is not None else None,
+            }
+            entry["up"] += up
+            entry["total"] += total
+        return {
+            name: {"uptime": round(100.0 * e["up"] / e["total"], 2), "slots": e["slots"], "slot_seconds": slot}
+            for name, e in out.items()
+        }
 
     return await asyncio.to_thread(fetch_data)
 

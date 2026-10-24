@@ -79,6 +79,27 @@
         </div>
     </div>
 
+    <!-- One range selector scopes the uptime bar on every service. -->
+    <div class="section-head">
+        <div>
+            <h2 class="section-head__title">Uptime</h2>
+            <p class="section-head__sub" id="uptime-sub">Last 24 hours</p>
+        </div>
+        <div class="section-head__tools">
+            <div class="legend">
+                <span class="legend__item"><i style="background: var(--ok)"></i>Up</span>
+                <span class="legend__item"><i style="background: var(--warn)"></i>Partly down</span>
+                <span class="legend__item"><i style="background: var(--crit)"></i>Down</span>
+                <span class="legend__item"><i style="background: var(--surface-3)"></i>No data</span>
+            </div>
+            <div class="segmented" id="uptime-range">
+                <button type="button" class="is-active" data-range="24h">24H</button>
+                <button type="button" data-range="7d">7D</button>
+                <button type="button" data-range="30d">30D</button>
+            </div>
+        </div>
+    </div>
+
     <div id="service-groups"></div>
 
     <div class="empty" id="service-empty" hidden>

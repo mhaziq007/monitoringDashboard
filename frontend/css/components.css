@@ -280,6 +280,14 @@
     padding-bottom: var(--s-3);
 }
 
+.section-head__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--s-3) var(--s-4);
+}
+
 .section-head__title {
     font-size: var(--t-14);
     font-weight: 600;
@@ -430,6 +438,7 @@
 /* --- Service card ------------------------------------------------------- */
 .service {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--s-3);
     padding: var(--s-3);
@@ -485,6 +494,24 @@
 .service[data-state='offline'] {
     border-color: var(--crit-line);
 }
+
+/* Uptime bar: one block per slot of the selected range, oldest first. */
+.service__bar {
+    flex-basis: 100%;
+    display: flex;
+    gap: 2px;
+    height: 18px;
+}
+
+.service__bar i {
+    flex: 1;
+    border-radius: 2px;
+    background: var(--ok);
+}
+
+.service__bar i[data-state='partial'] { background: var(--warn); }
+.service__bar i[data-state='down']    { background: var(--crit); }
+.service__bar i[data-state='none']    { background: var(--surface-3); }
 
 .service[data-state='offline'] .service__name {
     color: var(--fg-muted);
