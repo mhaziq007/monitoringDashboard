@@ -1001,10 +1001,45 @@
 }
 
 .disk__foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
     margin-top: 5px;
     font-size: var(--t-10);
     color: var(--fg-subtle);
     font-variant-numeric: tabular-nums;
+}
+
+.disk__foot > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.disk .meter__fill { background: var(--m-disk); }
+
+/* Coloured against the disk's own alert threshold (devices.js diskTone). */
+.disk[data-tone='warn'] .meter__fill { background: var(--warn); }
+.disk[data-tone='crit'] .meter__fill { background: var(--crit); }
+.disk[data-tone='warn'] .disk__pct { color: var(--warn); }
+.disk[data-tone='crit'] .disk__pct { color: var(--crit); }
+
+.disk__alert {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.disk__alert select {
+    padding: 1px 4px;
+    font-size: var(--t-10);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    cursor: pointer;
 }
 
 /* Container rows */

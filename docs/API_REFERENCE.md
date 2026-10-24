@@ -263,6 +263,16 @@ One node's own CPU %, memory % and network throughput over a range, from the `no
 
 ---
 
+### 3.3b Disk Alert Thresholds
+Each disk alerts at 90% unless set otherwise; a media drive meant to fill up can be raised or switched off. Stored in the `settings` table, so every browser (and later the server's own alerts) uses the same values.
+
+- **Endpoints**: `GET /api/settings/disk-alerts` and `PUT /api/settings/disk-alerts`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **PUT body**: `{ "hostname": "haziq-nas", "mount": "/mnt/jellyfin-media", "trip": 95 }`, where `trip` is a percent from 50 to 99, `"off"`, or `null` to go back to the default. Anything else is `400`.
+- **Response** (both): every override, `{ "haziq-nas": { "/mnt/jellyfin-media": "off", "/mnt/restic-extra": 95 } }`. A PUT also broadcasts it as a `disk_alerts` stream event.
+
+---
+
 ### 3.4 Power Draw & Fleet Load History
 Returns time-series lab power and fleet load, downsampled based on the requested window. Each point carries:
 - `power`: watts drawn by online physical nodes (VMs excluded).
@@ -381,6 +391,9 @@ Broadcast when a node is removed with `DELETE /api/devices/{hostname}`.
 event: removed
 data: {"hostname": "old-nas"}
 ```
+
+##### `disk_alerts`
+Broadcast after a disk's alert threshold changes, with every override (same shape as `GET /api/settings/disk-alerts`).
 
 ##### `services_init`
 Sent upon initial connection containing the full list of monitored services.

@@ -346,14 +346,14 @@ function updateCard(device) {
             .join('');
     }
 
-    const disk = fullestDisk(device);
+    const disk = urgentDisk(device);
     ref.diskMetric.hidden = !disk;
     if (disk) {
         ref.diskValue.textContent = `${disk.percent.toFixed(0)}%`;
         ref.diskBar.style.width = `${Math.min(100, disk.percent)}%`;
         ref.diskNote.textContent = `${disk.mount} · ${bytesShort(disk.used)} / ${bytesShort(disk.total)}`;
-        ref.diskNote.title = 'Fullest disk';
-        setTone(ref.diskMetric, 'load', loadTone(disk.percent));
+        ref.diskNote.title = 'The disk nearest its alert threshold';
+        setTone(ref.diskMetric, 'load', diskTone(disk.percent, diskTrip(device.hostname, disk.mount)));
     }
 
     if (size === 'large') {
@@ -361,7 +361,8 @@ function updateCard(device) {
             device.docker_containers?.length ? containersSection(device) : ''].join('');
         // Rebuilt only when something shown changed, so a hover tooltip on a
         // container is not wiped every few seconds.
-        if (html !== entry.detailsHtml) {
+        // Nor while a disk's alert dropdown in it has focus, which would close it.
+        if (html !== entry.detailsHtml && !ref.details.contains(document.activeElement)) {
             ref.details.innerHTML = html;
             entry.detailsHtml = html;
         }
@@ -397,7 +398,6 @@ function diskList(device) {
               percent: (device.disk.used / device.disk.total) * 100 }];
 }
 
-const fullestDisk = (device) => diskList(device).reduce((top, d) => (!top || d.percent > top.percent ? d : top), null);
 
 /** Set a data attribute only when it changes, and remove it when empty. */
 function setTone(el, attribute, value) {
@@ -451,12 +451,12 @@ function evaluateAlerts(device) {
     const tripped = [];
     const cleared = [];
 
-    const check = (key, value, unit = '') => {
+    const check = (key, value, unit = '', limits = THRESHOLDS[key]) => {
         if (value === undefined || value === null) {
             alerts[key] = false;
             return;
         }
-        const { trip, clear, label } = THRESHOLDS[key];
+        const { trip, clear, label } = limits;
         if (!alerts[key] && value > trip) {
             alerts[key] = true;
             tripped.push(`${label} critical at ${value.toFixed(0)}${unit}`);
@@ -470,13 +470,107 @@ function evaluateAlerts(device) {
     check('temp', device.temp, '°C');
     check('gpuUtil', device.gpu?.utilization, '%');
     check('gpuTemp', device.gpu?.temp, '°C');
-    check('disk', fullestDisk(device)?.percent, '%');
+
+    // Every disk against its own threshold. A disk switched off, or no longer
+    // reported, has its alert cleared.
+    const diskKeys = new Set();
+    diskList(device).forEach((disk) => {
+        const key = `disk:${disk.mount}`;
+        const trip = diskTrip(device.hostname, disk.mount);
+        diskKeys.add(key);
+        if (trip === null) alerts[key] = false;
+        else check(key, disk.percent, '%', { trip, clear: trip - 5, label: `Disk ${disk.mount}` });
+    });
+    Object.keys(alerts)
+        .filter((key) => key.startsWith('disk:') && !diskKeys.has(key))
+        .forEach((key) => { alerts[key] = false; });
 
     device.alerts = alerts;
 
     if (tripped.length) chime();
     tripped.forEach((message) => toast(message, { host: device.hostname, tone: 'crit' }));
     cleared.forEach((message) => toast(message, { host: device.hostname, tone: 'ok' }));
+}
+
+/* --- Per-disk alert thresholds ------------------------------------------ */
+
+// hostname -> mount -> percent or 'off', kept on the server so every browser
+// (and later the server's own alerts) uses the same settings.
+let diskAlerts = {};
+const DISK_CHOICES = [null, 80, 95, 98, 'off'];   // null is the default
+
+/** The percent this disk alerts at, or null when its alert is off. */
+function diskTrip(hostname, mount) {
+    const set = diskAlerts[hostname]?.[mount];
+    if (set === 'off') return null;
+    return typeof set === 'number' ? set : THRESHOLDS.disk.trip;
+}
+
+/** Meter tone against the disk's own threshold: amber from 15 points short. */
+function diskTone(percent, trip) {
+    if (trip === null) return '';
+    if (percent >= trip) return 'crit';
+    return percent >= trip - 15 ? 'warn' : '';
+}
+
+/** The disk nearest its threshold, or the fullest when every alert is off. */
+function urgentDisk(device) {
+    const disks = diskList(device);
+    const watched = disks.filter((d) => diskTrip(device.hostname, d.mount) !== null);
+    const score = (d) => d.percent / (diskTrip(device.hostname, d.mount) ?? 100);
+    return (watched.length ? watched : disks).reduce((top, d) => (!top || score(d) > score(top) ? d : top), null);
+}
+
+function diskAlertSelect(hostname, mount) {
+    const set = diskAlerts[hostname]?.[mount] ?? null;
+    const choices = DISK_CHOICES.includes(set) ? DISK_CHOICES : [...DISK_CHOICES, set];
+    const options = choices.map((value) => {
+        const label = value === null ? `${THRESHOLDS.disk.trip}% (default)` : value === 'off' ? 'Off' : `${value}%`;
+        return `<option value="${value ?? ''}"${value === set ? ' selected' : ''}>${label}</option>`;
+    }).join('');
+    return `
+        <label class="disk__alert" title="Alert when this disk is fuller than this">
+            Alert at
+            <select data-disk-alert data-host="${esc(hostname)}" data-mount="${esc(mount)}">${options}</select>
+        </label>`;
+}
+
+function applyDiskAlerts(map) {
+    diskAlerts = map || {};
+    // Re-check now, so switching a disk off clears its alert straight away.
+    // Offline nodes only hold stale figures, which must not raise alerts.
+    nodes.forEach((device) => {
+        if (isOnline(device)) evaluateAlerts(device);
+        updateCard(device);
+    });
+    updateFleet();
+    renderDrawer();
+}
+
+async function loadDiskAlerts() {
+    try {
+        applyDiskAlerts(await getJson('/api/settings/disk-alerts'));
+    } catch (err) {
+        console.error('Disk alert settings request failed:', err);
+    }
+}
+
+async function saveDiskAlert(select) {
+    const { host, mount } = select.dataset;
+    const trip = select.value === '' ? null : select.value === 'off' ? 'off' : Number(select.value);
+    select.blur();   // lets the section refresh again
+    try {
+        const response = await api('/api/settings/disk-alerts', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hostname: host, mount, trip }),
+        });
+        if (!response.ok) throw new Error(`responded ${response.status}`);
+        applyDiskAlerts(await response.json());
+    } catch (err) {
+        console.error('Saving the disk alert failed:', err);
+        toast('Could not save the disk alert', { host, tone: 'crit' });
+    }
 }
 
 /* --- Fleet summary ------------------------------------------------------ */
@@ -665,8 +759,11 @@ function renderDrawer() {
     // to make the live refresh invisible to someone reading mid-list.
     // The history charts above these sections stay put; only they refresh.
     const body = document.getElementById('drawer-body');
+    const sections = document.getElementById('drawer-sections');
+    // Rebuilding under a disk's open alert dropdown would close it.
+    if (sections.contains(document.activeElement)) return;
     const scroll = body.scrollTop;
-    document.getElementById('drawer-sections').innerHTML = parts.join('');
+    sections.innerHTML = parts.join('');
     body.scrollTop = scroll;
 }
 
@@ -690,16 +787,22 @@ function storageSection(device) {
     if (!disks.length) return '';
     const io = device.disk_speeds
         ? `R ${speed(device.disk_speeds.read_speed)} · W ${speed(device.disk_speeds.write_speed)}` : '';
-    return section('Storage', 'fa-hard-drive', disks.map((disk) => `
-        <div class="disk">
+    return section('Storage', 'fa-hard-drive', disks.map((disk) => {
+        const tone = diskTone(disk.percent, diskTrip(device.hostname, disk.mount));
+        return `
+        <div class="disk"${tone ? ` data-tone="${tone}"` : ''}>
             <div class="disk__head">
                 <span class="disk__mount">${esc(disk.mount)}</span>
                 <span class="disk__dev">${esc(disk.device || '')}</span>
                 <span class="disk__pct">${disk.percent.toFixed(0)}%</span>
             </div>
-            <div class="meter meter--lg"><i class="meter__fill" style="width:${Math.min(100, disk.percent)}%;background:var(--m-disk)"></i></div>
-            <div class="disk__foot">${bytes(disk.used)} used of ${bytes(disk.total)}</div>
-        </div>`).join(''), io);
+            <div class="meter meter--lg"><i class="meter__fill" style="width:${Math.min(100, disk.percent)}%"></i></div>
+            <div class="disk__foot">
+                <span>${bytes(disk.used)} used of ${bytes(disk.total)}</span>
+                ${diskAlertSelect(device.hostname, disk.mount)}
+            </div>
+        </div>`;
+    }).join(''), io);
 }
 
 function networkSection(device) {
@@ -882,6 +985,12 @@ async function start() {
     });
 
     loadHistory('6h');
+    // Before the first reports arrive, so a disk set to "off" never alerts.
+    await loadDiskAlerts();
+    document.addEventListener('change', (event) => {
+        const select = event.target.closest('select[data-disk-alert]');
+        if (select) saveDiskAlert(select);
+    });
     let reconnected = false;
 
     connectStream({
@@ -895,15 +1004,22 @@ async function start() {
             reorder();
             updateFleet();
             // Points appended locally while the server was away are guesses.
-            if (reconnected) loadHistory(range);
-            else historyHosts().forEach(loadNodeHistory);
+            if (reconnected) {
+                loadHistory(range);
+                loadDiskAlerts();   // changes made while the stream was down
+            } else {
+                historyHosts().forEach(loadNodeHistory);
+            }
             reconnected = true;
         },
         removed: ({ hostname }) => dropNode(hostname),
+        disk_alerts: applyDiskAlerts,
         metrics: (device) => {
             ingest(device);
             const stored = nodes.get(device.hostname);
-            evaluateAlerts(stored);
+            // The ping sweep re-broadcasts offline nodes too; their last
+            // figures are stale and must not raise alerts.
+            if (isOnline(stored)) evaluateAlerts(stored);
             updateCard(stored);
             reorder();
             if (openHost === device.hostname) renderDrawer();
