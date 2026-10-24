@@ -131,6 +131,59 @@
     font-size: var(--t-10);
 }
 
+/* A muted node: quiet, not a warning. */
+.badge--muted {
+    background: var(--surface-3);
+    color: var(--fg-muted);
+    border-color: var(--border);
+}
+
+/* --- Mute bar (top of the node drawer) ---------------------------------- */
+.mute-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s-2) var(--s-3);
+    padding: var(--s-3);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    background: var(--surface-inset);
+    font-size: var(--t-12);
+    color: var(--fg-muted);
+}
+
+.mute-bar[data-muted='true'] {
+    border-color: var(--warn-line);
+    background: var(--warn-quiet);
+    color: var(--fg);
+}
+
+.mute-bar > i {
+    color: var(--fg-subtle);
+}
+
+.mute-bar[data-muted='true'] > i {
+    color: var(--warn);
+}
+
+.mute-bar__text {
+    flex: 1 1 220px;
+    min-width: 0;
+}
+
+.mute-bar__choices {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-2);
+}
+
+.mute-bar .btn--small {
+    height: 30px;
+    padding: 0 var(--s-3);
+    font-size: var(--t-12);
+    white-space: nowrap;
+}
+
 /* --- Capability chip (footer of a node card) ---------------------------- */
 .chip {
     display: inline-flex;

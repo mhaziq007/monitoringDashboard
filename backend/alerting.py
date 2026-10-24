@@ -80,6 +80,9 @@ class AlertEngine:
         # Reports from before a restart look old; nodes get OFFLINE_AFTER from
         # startup to report in before any of them counts as offline.
         self.started_at = started_at
+        # Set by the server from the mutes in mutes.py: nothing new fires for these.
+        self.muted_hosts: set = set()
+        self.muted_services: set = set()
         self.active: Dict[str, dict] = {}     # key -> alert that fired and has not resolved
         self.pending: Dict[str, float] = {}   # key -> when its condition started holding
         self.failures: Dict[str, int] = {}    # service name -> consecutive failed probes
@@ -90,6 +93,13 @@ class AlertEngine:
         for alert in open_alerts:
             self.active[alert["key"]] = alert
 
+    def is_muted(self, key: str) -> bool:
+        """Keys are "service:<name>" or "<kind>:<host>[:...]"."""
+        kind, _, rest = key.partition(":")
+        if kind == "service":
+            return rest in self.muted_services
+        return rest.split(":", 1)[0] in self.muted_hosts
+
     def snapshot(self) -> List[dict]:
         order = {"crit": 0, "warn": 1}
         return sorted(self.active.values(), key=lambda a: (order.get(a["severity"], 2), a["started"]))
@@ -97,6 +107,8 @@ class AlertEngine:
     def _hold(self, events: List[Event], now: float, key: str, tripped: bool, cleared: bool,
               held: float, fire: Callable[[], dict], resolve: Callable[[dict], Tuple[str, str]]):
         """Fire `key` once `tripped` has held for `held` seconds; resolve it when `cleared`."""
+        if tripped and self.is_muted(key):
+            tripped = False   # muted: nothing new fires, and its hold time starts over afterwards
         if key in self.active:
             if cleared:
                 alert = self.active.pop(key)
