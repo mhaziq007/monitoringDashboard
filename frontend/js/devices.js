@@ -19,7 +19,8 @@ import {
 
 const nodes = new Map();   // hostname -> latest device payload (+ history, alerts)
 const cards = new Map();   // hostname -> { el, ref }
-let pinned = readPinned();
+let order = readOrder();     // hostnames in the order the user arranged them
+let dragging = null;         // the card being dragged, while a drag is in progress
 let sizes = readSizes();     // hostname -> 'large' | 'compact'; absent means normal
 let openHost = null;
 let drawerCharts = [];
@@ -31,16 +32,24 @@ let range = '6h';
 const grid = document.getElementById('node-grid');
 const empty = document.getElementById('node-empty');
 
-function readPinned() {
+function readOrder() {
     try {
-        return new Set(JSON.parse(localStorage.getItem('pinnedDevices') || '[]'));
+        const saved = localStorage.getItem('nodeOrder');
+        // Dragging replaced "pin to top"; nodes pinned before start the order.
+        return JSON.parse(saved || localStorage.getItem('pinnedDevices') || '[]');
     } catch {
-        return new Set();
+        return [];
     }
 }
 
-function savePinned() {
-    localStorage.setItem('pinnedDevices', JSON.stringify([...pinned]));
+function saveOrder() {
+    order = [...grid.querySelectorAll('.node')].map((el) => el.dataset.host);
+    try {
+        localStorage.setItem('nodeOrder', JSON.stringify(order));
+        localStorage.removeItem('pinnedDevices');
+    } catch {
+        // Storage blocked: the arrangement lasts until the page reloads.
+    }
 }
 
 function readSizes() {
@@ -131,8 +140,9 @@ const CARD_TEMPLATE = `
                 <i class="status__dot"></i><span data-r="statusText">Offline</span>
             </span>
             <button class="icon-btn" data-r="size"><i class="fa-solid"></i></button>
-            <button class="icon-btn" data-r="pin" title="Pin to top" aria-label="Pin to top">
-                <i class="fa-regular fa-star"></i>
+            <button class="icon-btn node__grip" data-r="grip"
+                    title="Drag to rearrange (or focus and use the arrow keys)" aria-label="Move card">
+                <i class="fa-solid fa-grip-vertical"></i>
             </button>
         </div>
     </div>
@@ -226,10 +236,9 @@ function buildCard(device) {
     ref.icon.classList.add(deviceIcon(device.hostname));
     ref.name.textContent = device.hostname;
 
-    ref.pin.addEventListener('click', (event) => {
-        event.stopPropagation();
-        togglePin(device.hostname);
-    });
+    ref.grip.addEventListener('pointerdown', (event) => startDrag(event, el));
+    ref.grip.addEventListener('click', (event) => event.stopPropagation());
+    ref.grip.addEventListener('keydown', (event) => nudgeCard(event, el));
     ref.size.addEventListener('click', (event) => {
         event.stopPropagation();
         resizeCard(device.hostname);
@@ -251,6 +260,7 @@ function buildCard(device) {
     const entry = { el, ref, chipKey: '' };
     cards.set(device.hostname, entry);
     grid.appendChild(el);
+    cardSizer.observe(el);
     return entry;
 }
 
@@ -260,10 +270,6 @@ function updateCard(device) {
     const online = isOnline(device);
 
     el.dataset.state = online ? 'online' : 'offline';
-    el.classList.toggle('is-pinned', pinned.has(device.hostname));
-    ref.pin.classList.toggle('is-on', pinned.has(device.hostname));
-    ref.pin.firstElementChild.className = pinned.has(device.hostname)
-        ? 'fa-solid fa-star' : 'fa-regular fa-star';
 
     const size = sizes[device.hostname] || 'normal';
     el.dataset.size = size;
@@ -389,6 +395,108 @@ function resizeCard(hostname) {
     if (device.cpuHistory?.length > 1) drawSparkline(entry.ref.cpuSpark, device.cpuHistory, '--m-cpu');
 }
 
+/* --- Board layout: packing and drag to rearrange ------------------------- */
+
+// The grid's rows are this many pixels tall (layout.css); each card spans
+// as many as its height needs, so short cards stack beside a tall large one
+// instead of leaving a hole under themselves.
+const ROW_UNIT = 4;
+
+const cardSizer = new ResizeObserver((entries) => {
+    for (const { target } of entries) {
+        const gap = parseFloat(getComputedStyle(target).marginBottom) || 0;
+        target.style.gridRowEnd = `span ${Math.ceil((target.offsetHeight + gap) / ROW_UNIT)}`;
+    }
+});
+
+/**
+ * Dragging moves the card itself through the grid, so the board reflows
+ * live under the pointer. Pointer events rather than HTML drag and drop, so
+ * it works with touch too.
+ */
+function startDrag(event, el) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const id = event.pointerId;
+    dragging = { el, x: event.clientX, y: event.clientY, last: null };
+    el.classList.add('is-dragging');
+    document.body.classList.add('is-arranging');
+
+    // Listened for on the window, not the grip: moving the card through the
+    // grid detaches the grip, which drops any pointer capture it held.
+    const move = (e) => {
+        if (e.pointerId !== id) return;
+        dragging.x = e.clientX;
+        dragging.y = e.clientY;
+        dragOver();
+    };
+    const end = (e) => {
+        if (e.pointerId !== id) return;
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', end);
+        window.removeEventListener('pointercancel', end);
+        el.classList.remove('is-dragging');
+        document.body.classList.remove('is-arranging');
+        dragging = null;
+        saveOrder();
+        // Letting go over the dragged card would click it open.
+        suppressClick = true;
+        setTimeout(() => { suppressClick = false; }, 0);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', end);
+    requestAnimationFrame(autoScroll);
+}
+
+let suppressClick = false;
+window.addEventListener('click', (event) => {
+    if (!suppressClick) return;
+    event.stopPropagation();
+    event.preventDefault();
+}, true);
+
+/** Move the dragged card before or after the card under the pointer. */
+function dragOver() {
+    const { el, x, y } = dragging;
+    const over = document.elementFromPoint(x, y)?.closest('.node');
+    if (!over || over === el || over.parentElement !== grid) return;
+    const rect = over.getBoundingClientRect();
+    const before = x < rect.left + rect.width / 2;
+    // Moving shifts the cards; without this the pair under the pointer can
+    // swap back and forth on every pointer move.
+    const key = `${over.dataset.host}:${before}`;
+    if (dragging.last === key) return;
+    dragging.last = key;
+    grid.insertBefore(el, before ? over : over.nextSibling);
+}
+
+/** Scroll while the pointer is held near the top or bottom of the window. */
+function autoScroll() {
+    if (!dragging) return;
+    const edge = 72;
+    const step = dragging.y < edge ? -14 : dragging.y > window.innerHeight - edge ? 14 : 0;
+    if (step) {
+        window.scrollBy(0, step);
+        dragOver();
+    }
+    requestAnimationFrame(autoScroll);
+}
+
+/** Arrow keys on the grip move its card one place, for keyboard users. */
+function nudgeCard(event, el) {
+    const back = event.key === 'ArrowLeft' || event.key === 'ArrowUp';
+    const forward = event.key === 'ArrowRight' || event.key === 'ArrowDown';
+    if (!back && !forward) return;
+    event.preventDefault();
+    const sibling = back ? el.previousElementSibling : el.nextElementSibling;
+    if (!sibling?.classList.contains('node')) return;
+    grid.insertBefore(el, back ? sibling : sibling.nextSibling);
+    saveOrder();
+    event.currentTarget.focus();   // moving the card drops focus
+}
+
 /** Disks as reported, falling back to the single "disk" older agents send. */
 function diskList(device) {
     if (device.disks?.length) return device.disks;
@@ -405,25 +513,19 @@ function setTone(el, attribute, value) {
     else el.removeAttribute(`data-${attribute}`);
 }
 
-function togglePin(hostname) {
-    if (pinned.has(hostname)) pinned.delete(hostname);
-    else pinned.add(hostname);
-    savePinned();
-    nodes.forEach(updateCard);
-    reorder();
-}
-
 /**
- * Pinned nodes first, then offline-last, then alphabetical.
- * Safe to call on every tick: it compares against the current DOM order and
- * only moves nodes when the order actually changed. That matters because a
- * node going stale changes its rank without any event arriving for it.
+ * The user's arrangement first; nodes never placed by hand follow, online
+ * before offline, then by name. Safe to call on every tick: it compares
+ * against the current DOM order and only moves nodes when it changed.
  */
 function reorder() {
+    if (dragging) return;   // the pointer owns the order mid-drag
+    const rank = new Map(order.map((host, i) => [host, i]));
     const desired = [...nodes.values()]
         .sort((a, b) => {
-            const pin = Number(pinned.has(b.hostname)) - Number(pinned.has(a.hostname));
-            if (pin) return pin;
+            const ra = rank.get(a.hostname) ?? Infinity;
+            const rb = rank.get(b.hostname) ?? Infinity;
+            if (ra !== rb) return ra < rb ? -1 : 1;
             const live = Number(isOnline(b)) - Number(isOnline(a));
             if (live) return live;
             return a.hostname.localeCompare(b.hostname);
@@ -825,6 +927,7 @@ function ingest(device) {
 function dropNode(hostname) {
     nodes.delete(hostname);
     nodeHistory.delete(hostname);
+    if (cards.has(hostname)) cardSizer.unobserve(cards.get(hostname).el);
     cards.get(hostname)?.el.remove();
     cards.delete(hostname);
     if (openHost === hostname) closeDrawer();
