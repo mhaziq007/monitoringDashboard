@@ -479,12 +479,29 @@ def get_vpn_status():
         pass
     return vpns
 
+_HEALTH = re.compile(r"\((healthy|unhealthy|health: starting)\)")
+_UP_FOR = re.compile(r"^Up (Less than a second|About a minute|About an hour|(\d+) (second|minute|hour|day|week|month|year)s?)")
+_UNIT_SECONDS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400, "week": 604800,
+                 "month": 2592000, "year": 31536000}
+
+def parse_docker_status(status):
+    """Health and time up from docker ps's Status column, e.g.
+    "Up 3 hours (unhealthy)" -> ("unhealthy", 10800). Either can be None."""
+    health = _HEALTH.search(status)
+    health = health.group(1).replace("health: ", "") if health else None
+    up = _UP_FOR.match(status)
+    if not up:
+        return health, None
+    if up.group(2):
+        return health, int(up.group(2)) * _UNIT_SECONDS[up.group(3)]
+    return health, {"Less than a second": 0, "About a minute": 60, "About an hour": 3600}[up.group(1)]
+
 def get_docker_containers():
     """Retrieve Docker container list using CLI subprocess call."""
     containers = []
     try:
         result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Image}}"],
+            ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Image}}\t{{.Status}}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -495,9 +512,11 @@ def get_docker_containers():
             lines = result.stdout.strip().split("\n")
             for line in lines:
                 parts = line.split("\t")
-                if len(parts) == 3:
-                    name, status, image = parts
-                    container = {"name": name, "state": status.capitalize(), "image": image}
+                if len(parts) == 4:
+                    name, status, image, detail = parts
+                    health, uptime = parse_docker_status(detail)
+                    container = {"name": name, "state": status.capitalize(), "image": image,
+                                 "status": detail, "health": health, "uptime": uptime}
                     # Adds update, update_note and the configured image name,
                     # which docker ps swaps for an ID once the tag has moved.
                     container.update(state.docker_updates.get(name, {}))

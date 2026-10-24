@@ -197,16 +197,19 @@ Endpoint for client nodes to push system metrics every 5 seconds.
   },
   "docker_containers": [
     { "name": "immich_server", "state": "Running", "image": "ghcr.io/immich-app/immich-server:release",
+      "status": "Up 3 days (healthy)", "health": "healthy", "uptime": 259200,
       "update": "available", "update_note": "Newer image on the registry" },
-    { "name": "jellyfin", "state": "Running", "image": "jellyfin/jellyfin:latest", "update": "current", "update_note": "" },
-    { "name": "postgres", "state": "Running", "image": "postgres:16", "update": null,
+    { "name": "jellyfin", "state": "Running", "image": "jellyfin/jellyfin:latest",
+      "status": "Up 3 days", "health": null, "uptime": 259200, "update": "current", "update_note": "" },
+    { "name": "gluetun", "state": "Running", "image": "qmcgaw/gluetun",
+      "status": "Up 2 hours (unhealthy)", "health": "unhealthy", "uptime": 7200, "update": null,
       "update_note": "Could not check: registry unreachable (timed out)" }
   ],
   "pending_updates": 3,
   "is_vm": false
 }
 ```
-Each container's `update` is `available`, `current`, or `null` when it cannot be checked (see the agent guide); `update_note` explains. Both are absent until the agent's first check finishes, a few seconds after it starts.
+Each container's `status` is docker's own Status column; `health` (`healthy`, `unhealthy`, `starting` or `null` without a health check) and `uptime` (seconds up, roughly, or `null` when not running) are read from it, and drive the container alerts. `update` is `available`, `current`, or `null` when it cannot be checked (see the agent guide); `update_note` explains. Both are absent until the agent's first check finishes, a few seconds after it starts.
 
 `is_vm: true` marks a virtual machine. Its `cpu_power` and `gpu.power` are left out of the power history and the dashboard's power and cost totals.
 
