@@ -13,6 +13,9 @@
 #   --user <name>     user to run the agent as (default: root)
 #   --vm <auto|yes|no>  whether this node is a virtual machine; VMs are left
 #                     out of the power and cost totals (default: auto-detect)
+#   --backup-dir <dir>  keep nightly copies of the dashboard's database here
+#                     ("none" turns it off again); needs --backup-key
+#   --backup-key <key>  the backup key from the dashboard's Alerts page
 #
 # Config is written to /etc/homelab-agent.env, so agent.py itself is never
 # edited and stays in sync with git.
@@ -26,6 +29,8 @@ KEY=""
 INTERVAL=5
 RUN_USER="root"
 IS_VM=""
+BACKUP_DIR=""
+BACKUP_KEY=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -34,6 +39,8 @@ while [[ $# -gt 0 ]]; do
         --interval) INTERVAL="$2"; shift 2 ;;
         --user)     RUN_USER="$2"; shift 2 ;;
         --vm)       IS_VM="$2";    shift 2 ;;
+        --backup-dir) BACKUP_DIR="$2"; shift 2 ;;
+        --backup-key) BACKUP_KEY="$2"; shift 2 ;;
         *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
 done
@@ -51,8 +58,22 @@ if [[ -f "$ENV_FILE" ]]; then
     [[ -z "$SERVER" ]] && SERVER="${HOMELAB_SERVER_URL:-}"
     [[ -z "$KEY" ]] && KEY="${HOMELAB_AGENT_KEY:-}"
     [[ -z "$IS_VM" ]] && IS_VM="${HOMELAB_IS_VM:-}"
+    [[ -z "$BACKUP_DIR" ]] && BACKUP_DIR="${HOMELAB_BACKUP_DIR:-}"
+    [[ -z "$BACKUP_KEY" ]] && BACKUP_KEY="${HOMELAB_BACKUP_KEY:-}"
 fi
 IS_VM="${IS_VM:-auto}"
+if [[ "$BACKUP_DIR" == "none" ]]; then
+    BACKUP_DIR=""
+    BACKUP_KEY=""
+fi
+if [[ -n "$BACKUP_DIR" && -z "$BACKUP_KEY" ]]; then
+    echo "--backup-dir needs --backup-key (copy it from the dashboard's Alerts page)." >&2
+    exit 1
+fi
+if [[ -n "$BACKUP_DIR" && "$BACKUP_DIR" != /* ]]; then
+    echo "--backup-dir must be an absolute path (got '$BACKUP_DIR')." >&2
+    exit 1
+fi
 
 case "$IS_VM" in
     auto|yes|no) ;;
@@ -129,6 +150,12 @@ HOMELAB_AGENT_KEY=$KEY
 HOMELAB_INTERVAL=$INTERVAL
 HOMELAB_IS_VM=$IS_VM
 ENV
+if [[ -n "$BACKUP_DIR" ]]; then
+    printf 'HOMELAB_BACKUP_DIR=%s\nHOMELAB_BACKUP_KEY=%s\n' "$BACKUP_DIR" "$BACKUP_KEY" >> "$ENV_FILE"
+    # Owner-only: the copies hold the dashboard's settings, tokens included.
+    install -d -m 700 -o "$RUN_USER" "$BACKUP_DIR"
+    echo "==> Dashboard backups will be kept in $BACKUP_DIR"
+fi
 # Contains the shared agent key.
 chmod 600 "$ENV_FILE"
 chown "$RUN_USER" "$ENV_FILE"

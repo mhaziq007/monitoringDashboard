@@ -5,6 +5,7 @@
 import { api, getJson } from './api.js';
 import { toast } from './toast.js';
 import { esc, ago } from './format.js';
+import { copy } from './clipboard.js';
 
 const EVERY = [[3600, '1 hour'], [21600, '6 hours'], [43200, '12 hours'], [86400, '1 day'], [604800, '1 week']];
 const GRACE = [[900, '15 minutes'], [3600, '1 hour'], [21600, '6 hours'], [86400, '1 day']];
@@ -99,22 +100,6 @@ async function send(path, method, body) {
             : `the server answered ${response.status}`));
     }
     return data;
-}
-
-/** The clipboard API needs HTTPS (or localhost); a LAN address over HTTP gets the old way. */
-async function copy(text) {
-    try {
-        await navigator.clipboard.writeText(text);
-        return true;
-    } catch {
-        const area = Object.assign(document.createElement('textarea'), { value: text });
-        area.style.cssText = 'position:fixed;opacity:0';
-        document.body.appendChild(area);
-        area.select();
-        const ok = document.execCommand('copy');
-        area.remove();
-        return ok;
-    }
 }
 
 async function add(event) {

@@ -187,6 +187,18 @@ Detection runs once at startup:
 
 Set `HOMELAB_IS_VM=yes` or `no` in the agent environment to override detection (`auto` is the default). The install scripts take the same value as `--vm` (Linux) or `-Vm` (Windows). The agent logs the result at startup as `Node type: ...`.
 
+### 2.10 Dashboard Backups (`backup.py`, opt-in)
+One node's agent can keep nightly copies of the dashboard's database. It is off unless both of these are set in the agent environment (`install-agent.sh --backup-dir <dir> --backup-key <key>` writes them):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HOMELAB_BACKUP_DIR` | — | Where the copies go, e.g. `/var/backups/homelab-dashboard` (created owner-only) |
+| `HOMELAB_BACKUP_KEY` | — | The backup key from the dashboard's Alerts page |
+| `HOMELAB_BACKUP_HOUR` | `3` | Local hour after which the day's copy is made |
+| `HOMELAB_BACKUP_KEEP` | `14` | Copies kept; older ones are deleted |
+
+Once a day, after the hour and only if `homelab-dashboard-<today>.db.gz` is not there yet, a background thread downloads `GET /api/backup/snapshot` into a `.part` file, checks the SHA-256 the server sent and that the file unpacks to an SQLite database, and only then moves it into place. It then prunes old copies and reports the outcome to `POST /api/backup/report`. A failed run is retried an hour later.
+
 ---
 
 ## 3. Installation & Daemon Configuration

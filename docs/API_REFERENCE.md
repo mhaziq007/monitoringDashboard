@@ -468,6 +468,14 @@ Backups and scheduled jobs that report in. Each has a secret ping URL; the serve
 - **Body** (`/fail` only, optional): plain text, up to 500 characters kept, shown in the alert.
 - **Response**: `OK`, or `404` for an unknown token.
 
+### 3.11 Dashboard Backups
+Copies of this dashboard's own database. A node's agent (see the agent guide, 2.10) downloads one each night with the **backup key**, which can do nothing else; the shared agent key cannot read the database.
+
+- **`GET /api/backup`** (session): `{ "key": "...", "last": { "ok": true, "at": 1792838942.3, "detail": "homelab-dashboard-2026-10-24.db.gz, 48.6 MB, 14 kept in /var/backups/homelab-dashboard", "host": "haziq-apu2" }, "checkin_id": 3 }`. The key is made on first use; `last` is `null` until a node reports.
+- **`POST /api/backup/key`** (session): makes a new key and answers as above. The old key stops working at once.
+- **`GET /api/backup/snapshot`** (header `X-Backup-Key: <key>`, or a session): a consistent, integrity-checked, gzipped copy of the database (`application/gzip`, named `homelab-dashboard-YYYY-MM-DD.db.gz`), with its SHA-256 in the `X-Backup-SHA256` header. `401` without a valid key or session.
+- **`POST /api/backup/report`** (header `X-Backup-Key`): `{ "ok": true, "detail": "...", "host": "haziq-apu2" }`. Kept as `last`, and pinged into a built-in check-in, *Dashboard backup to <host>* (every day, 2 hours' grace), made on the first report: a failure alerts at once, and no successful report for 26 hours alerts as late.
+
 ---
 
 ## 4. Real-Time Streaming (SSE)

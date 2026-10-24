@@ -172,7 +172,7 @@ CREATE INDEX IF NOT EXISTS idx_alert_log_started ON alert_log(started);
 - Notification settings live in the `settings` table under `notifications`.
 
 #### `checkins`
-Backups and scheduled jobs that report in (`backend/checkins.py`): one row each, holding its secret ping token, schedule and last ping. Late or failed ones raise a `checkin` alert in `alert_log`.
+Backups and scheduled jobs that report in (`backend/checkins.py`): one row each, holding its secret ping token, schedule and last ping. Late or failed ones raise a `checkin` alert in `alert_log`. The dashboard's own nightly backup (`backend/backups.py`) reports through one of these, *Dashboard backup to <node>*; its key and last report live in the `settings` table under `backup`.
 ```sql
 CREATE TABLE IF NOT EXISTS checkins (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
