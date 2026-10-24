@@ -820,7 +820,7 @@ function containersSection(device) {
                 <span class="ctr__state">${esc(c.state)}</span>
             </div>`;
     }).join('');
-    return section('Containers', 'fa-cube', rows,
+    return section('Containers', 'fa-cube', `<div class="ctr-list">${rows}</div>`,
         `${running} of ${list.length} up${images ? ` · ${plural(images, 'update')}` : ''}`);
 }
 
@@ -907,7 +907,7 @@ function storageSection(device) {
             </div>
             <div class="meter meter--lg"><i class="meter__fill" style="width:${Math.min(100, disk.percent)}%"></i></div>
             <div class="disk__foot">
-                <span>${bytes(disk.used)} used of ${bytes(disk.total)}</span>
+                <span>${bytes(disk.used)} of ${bytes(disk.total)}</span>
                 ${diskAlertSelect(device.hostname, disk.mount)}
             </div>
         </div>`;

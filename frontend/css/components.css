@@ -779,6 +779,27 @@ body.is-arranging * {
     overflow-y: auto;
 }
 
+/* Containers take the card's full width below the other sections, laid out
+   side by side, rather than one narrow column beside empty space. */
+.node__details > section:has(.ctr-list) {
+    grid-column: 1 / -1;
+}
+
+.node__details .ctr-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 6px;
+}
+
+.node__details .ctr-list .ctr + .ctr {
+    margin-top: 0;
+}
+
+.node__details > section:has(.ctr-list) .section__body {
+    max-height: 300px;
+    padding-right: 4px;   /* keeps the scrollbar off the last column */
+}
+
 .node[data-size='compact'] :is(.node__meta, .metric__spark, .node__tiles, .node__foot) {
     display: none;
 }
@@ -1020,9 +1041,10 @@ body.is-arranging * {
 
 .disk__foot {
     display: flex;
+    flex-wrap: wrap;            /* the selector drops below in a narrow column */
     align-items: center;
     justify-content: space-between;
-    gap: var(--s-2);
+    gap: var(--s-1) var(--s-2);
     margin-top: 5px;
     font-size: var(--t-10);
     color: var(--fg-subtle);
@@ -1030,9 +1052,6 @@ body.is-arranging * {
 }
 
 .disk__foot > span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
@@ -1045,6 +1064,7 @@ body.is-arranging * {
 .disk[data-tone='crit'] .disk__pct { color: var(--crit); }
 
 .disk__alert {
+    margin-left: auto;          /* stays right-aligned when it wraps */
     display: inline-flex;
     align-items: center;
     gap: 6px;
