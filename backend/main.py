@@ -31,8 +31,13 @@ app.add_middleware(
 devices: Dict[str, dict] = {}
 device_persist_lock = asyncio.Lock()
 
-# In-memory store for historical power draw (Last 6 hours)
+# In-memory store for the last 6 hours of samples: lab power plus fleet load
 power_history: List[dict] = []
+
+# Fleet load recorded beside the power total. These arrived after power_log
+# existed, so older databases gain the columns on startup; their earlier rows
+# read as NULL, which the charts draw as a gap.
+FLEET_COLUMNS = ("cpu", "mem", "net_down", "net_up")
 MAX_POWER_HISTORY = 360  # 6 hours of 1-minute intervals
 
 # Services monitoring list
@@ -51,6 +56,10 @@ def init_db():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_power_log_timestamp ON power_log(timestamp)")
+        existing = {row[1] for row in cursor.execute("PRAGMA table_info(power_log)")}
+        for column in FLEET_COLUMNS:
+            if column not in existing:
+                cursor.execute(f"ALTER TABLE power_log ADD COLUMN {column} REAL")
 
         # Last report of every node. Without it a restart forgot any node that
         # was offline at the time, and blanked the rest until they reported.
@@ -153,9 +162,10 @@ def load_power_history_from_db():
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         six_hours_ago = time.time() - 21600
-        cursor.execute("SELECT timestamp, power FROM power_log WHERE timestamp >= ? ORDER BY timestamp ASC", (six_hours_ago,))
+        cursor.execute(f"SELECT timestamp, power, {', '.join(FLEET_COLUMNS)} FROM power_log "
+                       "WHERE timestamp >= ? ORDER BY timestamp ASC", (six_hours_ago,))
         rows = cursor.fetchall()
-        power_history = [{"time": r[0], "power": r[1]} for r in rows]
+        power_history = [{"time": r[0], "power": r[1], **dict(zip(FLEET_COLUMNS, r[2:]))} for r in rows]
         conn.close()
     except Exception as e:
         print(f"Error loading power history: {e}")
@@ -340,8 +350,26 @@ async def ping_background_loop():
         # Sleep for 10 seconds before next ping sweep
         await asyncio.sleep(10.0)
 
+def fleet_load(active: List[dict]) -> dict:
+    """Average CPU, share of memory in use and total network throughput.
+
+    VMs count here: unlike power, their load is their own. frontend/js/devices.js
+    computes the live headline values the same way.
+    """
+    cpus = [d["cpu_usage"] for d in active if isinstance(d.get("cpu_usage"), (int, float))]
+    mems = [d["memory"] for d in active if isinstance(d.get("memory"), dict) and d["memory"].get("total")]
+    nets = [d["network"] for d in active if isinstance(d.get("network"), dict)]
+    return {
+        "cpu": sum(cpus) / len(cpus) if cpus else None,
+        # Used over total rather than a mean of percentages, so a small box at
+        # 90% does not outweigh a 64 GB one at 10%.
+        "mem": 100.0 * sum(m.get("used") or 0 for m in mems) / sum(m["total"] for m in mems) if mems else None,
+        "net_down": sum(n.get("down_speed") or 0 for n in nets) if nets else None,
+        "net_up": sum(n.get("up_speed") or 0 for n in nets) if nets else None,
+    }
+
 async def record_power_history_loop():
-    """Background task to periodically record the total power draw of the lab."""
+    """Background task to periodically record lab power and fleet load."""
     while True:
         # Sleep first: sampling at startup, before any agent had reported,
         # wrote a 0 W point into the history on every restart.
@@ -349,11 +377,12 @@ async def record_power_history_loop():
         try:
             current_time = time.time()
             total_power = 0.0
-            for device in list(devices.values()):
-                is_active = (current_time - device.get("last_seen", 0)) < OFFLINE_THRESHOLD
+            active = [d for d in list(devices.values())
+                      if (current_time - d.get("last_seen", 0)) < OFFLINE_THRESHOLD]
+            for device in active:
                 # A VM's draw is either already in its host's reading or, for
                 # a cloud instance, not on this lab's bill at all.
-                if is_active and not device.get("is_vm"):
+                if not device.get("is_vm"):
                     cpu_p = device.get("cpu_power")
                     gpu_info = device.get("gpu")
                     gpu_p = gpu_info.get("power") if gpu_info else None
@@ -365,9 +394,11 @@ async def record_power_history_loop():
                         device_power += gpu_p
                     total_power += device_power
             
+            load = fleet_load(active)
             power_history.append({
                 "time": current_time,
-                "power": total_power
+                "power": total_power,
+                **load
             })
             
             if len(power_history) > MAX_POWER_HISTORY:
@@ -378,7 +409,9 @@ async def record_power_history_loop():
                 try:
                     conn = sqlite3.connect(DB_PATH)
                     cursor = conn.cursor()
-                    cursor.execute("INSERT INTO power_log (timestamp, power) VALUES (?, ?)", (current_time, total_power))
+                    cursor.execute(
+                        f"INSERT INTO power_log (timestamp, power, {', '.join(FLEET_COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?)",
+                        (current_time, total_power, *(load[c] for c in FLEET_COLUMNS)))
                     
                     # Delete values older than 30 days (30 * 24 * 3600 seconds)
                     limit_time = current_time - (30 * 24 * 3600)
@@ -621,8 +654,9 @@ async def get_power_history(range: str = "6h", current_user: str = Depends(get_c
                 start_time = current_time - 21600
                 interval = 60
                 
-            cursor.execute("""
-                SELECT CAST(timestamp / ? AS INTEGER) * ? as grp, AVG(power)
+            cursor.execute(f"""
+                SELECT CAST(timestamp / ? AS INTEGER) * ? as grp, AVG(power),
+                       {', '.join(f'AVG({c})' for c in FLEET_COLUMNS)}
                 FROM power_log
                 WHERE timestamp >= ?
                 GROUP BY grp
@@ -631,7 +665,14 @@ async def get_power_history(range: str = "6h", current_user: str = Depends(get_c
             rows = cursor.fetchall()
             conn.close()
             
-            return [{"time": r[0], "power": round(r[1], 1) if r[1] is not None else 0.0} for r in rows]
+            return [
+                {
+                    "time": r[0],
+                    "power": round(r[1], 1) if r[1] is not None else 0.0,
+                    **{c: (round(v, 1) if v is not None else None) for c, v in zip(FLEET_COLUMNS, r[2:])},
+                }
+                for r in rows
+            ]
         except Exception as query_err:
             print(f"Error querying power history database: {query_err}")
             return []

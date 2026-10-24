@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The topbar's brand mark: accent gradient tile with a two-unit server. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#tile)"/>
+  <rect x="13" y="15" width="38" height="15" rx="4" fill="#fff"/>
+  <rect x="13" y="34" width="38" height="15" rx="4" fill="#fff"/>
+  <rect x="19" y="21" width="14" height="3" rx="1.5" fill="#7c6cf3"/>
+  <rect x="19" y="40" width="14" height="3" rx="1.5" fill="#7c6cf3"/>
+  <circle cx="44" cy="22.5" r="2.75" fill="#22c55e"/>
+  <circle cx="44" cy="41.5" r="2.75" fill="#22c55e"/>
+</svg>

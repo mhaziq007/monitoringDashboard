@@ -7,11 +7,11 @@ import { api, getJson } from './api.js';
 import { toast, chime, unlockAudioOnInteraction } from './toast.js';
 import { drawSparkline, createTrendChart } from './charts.js';
 import {
-    OFFLINE_AFTER, MONTHLY_COST_PER_WATT, KWH_RATE, THRESHOLDS,
-    HISTORY_POINTS,
+    OFFLINE_AFTER, TARIFF, THRESHOLDS, HISTORY_POINTS,
+    effectiveRate, monthlyCost,
 } from './config.js';
 import {
-    esc, bytes, bytesShort, speed, speedShort, uptime, watts, money,
+    esc, bytes, bytesShort, speed, speedShort, uptime, uptimeShort, watts, money,
     loadTone, tempTone, latencyTone, deviceIcon,
 } from './format.js';
 
@@ -21,7 +21,8 @@ const nodes = new Map();   // hostname -> latest device payload (+ history, aler
 const cards = new Map();   // hostname -> { el, ref }
 let pinned = readPinned();
 let openHost = null;
-let trend = null;
+let charts = [];     // power, CPU, memory and network, all fed from `samples`
+let samples = [];    // history for the selected range, oldest first
 let range = '6h';
 
 const grid = document.getElementById('node-grid');
@@ -46,6 +47,28 @@ const isOnline = (device) => (Date.now() / 1000 - device.seen_at) < OFFLINE_AFTE
 // A VM's draw is either already in its host's reading or, for a cloud
 // instance, not on this lab's bill, so it counts as nothing everywhere.
 const nodePower = (d) => (d.is_vm ? 0 : (d.cpu_power || 0) + (d.gpu?.power || 0));
+
+/**
+ * Average CPU, share of memory in use and total network throughput, worked
+ * out exactly as the server's fleet_load() records them. VMs count here:
+ * unlike power, their load is their own.
+ */
+function fleetLoad(list) {
+    const total = (items, pick) => items.reduce((sum, item) => sum + (pick(item) || 0), 0);
+    const cpus = list.filter((d) => typeof d.cpu_usage === 'number');
+    const mems = list.map((d) => d.memory).filter((m) => m?.total);
+    const nets = list.map((d) => d.network).filter(Boolean);
+    const memUsed = total(mems, (m) => m.used);
+    const memTotal = total(mems, (m) => m.total);
+    return {
+        cpu: cpus.length ? total(cpus, (d) => d.cpu_usage) / cpus.length : null,
+        mem: mems.length ? (100 * memUsed) / memTotal : null,
+        net_down: nets.length ? total(nets, (n) => n.down_speed) : null,
+        net_up: nets.length ? total(nets, (n) => n.up_speed) : null,
+        memUsed,
+        memTotal,
+    };
+}
 
 /* --- Node card ---------------------------------------------------------- */
 
@@ -191,7 +214,9 @@ function updateCard(device) {
 
     const power = nodePower(device);
     ref.powerValue.textContent = power > 0 ? watts(power) : '—';
-    ref.uptimeValue.textContent = uptime(device.uptime);
+    // The tile fits six characters; the full figure is in the drawer and tooltip.
+    ref.uptimeValue.textContent = uptimeShort(device.uptime);
+    ref.uptimeValue.title = uptime(device.uptime);
     ref.netValue.textContent = device.network ? speedShort(device.network.down_speed) : '—';
 
     if (device.pending_updates > 0) {
@@ -344,8 +369,20 @@ function updateFleet() {
     set('stat-power-foot', `${drawing} node${drawing === 1 ? '' : 's'} drawing`
         + (vms ? ` · ${vms} VM${vms === 1 ? '' : 's'} excluded` : ''));
 
-    set('stat-cost', money(power * MONTHLY_COST_PER_WATT));
-    set('stat-cost-foot', `per month at $${KWH_RATE.toFixed(2)}/kWh`);
+    set('stat-cost', money(monthlyCost(power)));
+    const peakMonth = TARIFF.peakMonths.includes(new Date().getMonth() + 1);
+    set('stat-cost-foot', `per month · $${effectiveRate().toFixed(2)}/kWh `
+        + (peakMonth ? 'peak/off-peak blend' : 'off-peak'));
+
+    const load = fleetLoad(live);
+    const pct = (value) => (value === null ? '—' : `${value.toFixed(0)}<small>%</small>`);
+    set('load-cpu', pct(load.cpu));
+    set('load-cpu-sub', `Average across ${live.length} online node${live.length === 1 ? '' : 's'}`);
+    set('load-mem', pct(load.mem));
+    set('load-mem-sub', load.mem === null ? 'In use across online nodes'
+        : `${bytes(load.memUsed)} of ${bytes(load.memTotal)} in use`);
+    set('load-down', load.net_down === null ? '—' : speed(load.net_down));
+    set('load-up', load.net_up === null ? '—' : speed(load.net_up));
 
     set('stat-updates', String(updates));
     set('stat-updates-foot', updates ? 'Packages pending' : 'Everything current');
@@ -434,7 +471,7 @@ function renderDrawer() {
         ${kvItem('Latency', device.latency != null ? `${device.latency.toFixed(0)} ms` : '—', latencyTone(device.latency))}
         ${kvItem('Updates', device.pending_updates ?? 0, device.pending_updates ? 'warn' : '')}
     </div>`, device.is_vm ? 'VM, not in lab power'
-        : power > 0 ? `${money(power * MONTHLY_COST_PER_WATT)}/mo` : ''));
+        : power > 0 ? `${money(monthlyCost(power))}/mo` : ''));
 
     const ramPct = device.memory ? (device.memory.used / device.memory.total) * 100 : 0;
     parts.push(section('Compute', 'fa-microchip', `
@@ -504,7 +541,9 @@ function renderDrawer() {
     body.scrollTop = scroll;
 }
 
-/* --- Power history ------------------------------------------------------ */
+/* --- History: lab power and fleet load ----------------------------------- */
+
+const drawCharts = () => charts.forEach((chart) => chart.setData(samples, range));
 
 async function loadHistory(nextRange) {
     range = nextRange;
@@ -517,30 +556,32 @@ async function loadHistory(nextRange) {
     }[range];
 
     try {
-        trend.setData(await getJson(`/api/power-history?range=${range}`), range);
+        samples = await getJson(`/api/power-history?range=${range}`);
+        drawCharts();
     } catch (err) {
-        console.error('Power history request failed:', err);
+        console.error('History request failed:', err);
     }
 }
 
-/** Fold the live total into the tail of the 6h series between DB writes. */
-function appendLivePower() {
-    if (range !== '6h' || !trend) return;
+/** Fold the live values into the tail of the 6h series between DB writes. */
+function appendLive() {
+    if (range !== '6h' || !charts.length) return;
     // The chart places points by time, and the server stamps its own points,
     // so take "now" from the newest report rather than this browser's clock:
     // a few minutes of skew would otherwise open a fake gap at the right edge.
     const now = Math.max(...[...nodes.values()].map((d) => d.last_seen || 0));
-    const total = [...nodes.values()].filter(isOnline).reduce((sum, d) => sum + nodePower(d), 0);
-    const points = trend.points;
-    const last = points[points.length - 1];
+    const live = [...nodes.values()].filter(isOnline);
+    const { cpu, mem, net_down, net_up } = fleetLoad(live);
+    const sample = { power: live.reduce((sum, d) => sum + nodePower(d), 0), cpu, mem, net_down, net_up };
+    const last = samples[samples.length - 1];
 
     if (!last || now - last.time >= 60) {
-        points.push({ time: now, power: total });
-        if (points.length > 400) points.shift();
+        samples.push({ time: now, ...sample });
+        if (samples.length > 400) samples.shift();
     } else {
-        last.power = total;
+        Object.assign(last, sample);
     }
-    trend.setData(points, range);
+    drawCharts();
 }
 
 /* --- Wiring ------------------------------------------------------------- */
@@ -591,10 +632,28 @@ async function start() {
     mountShell();
     unlockAudioOnInteraction();
 
-    trend = createTrendChart(
-        document.getElementById('trend-canvas'),
-        document.getElementById('trend-tip'),
-    );
+    const chart = (id, opts) => createTrendChart(
+        document.getElementById(`${id}-canvas`), document.getElementById(`${id}-tip`), opts);
+    const percentAxis = { axis: (v) => `${Math.round(v)}%`, readout: (v) => `${v.toFixed(0)}%`, minPeak: 10, max: 100 };
+    charts = [
+        chart('trend', {
+            series: [{ key: 'power', label: 'Power', color: '--m-power' }],
+            axis: (v) => `${Math.round(v)}W`,
+            readout: (v) => `${v.toFixed(0)} W`,
+            minPeak: 50,
+        }),
+        chart('cpu', { series: [{ key: 'cpu', label: 'CPU', color: '--m-cpu' }], ...percentAxis }),
+        chart('mem', { series: [{ key: 'mem', label: 'Memory', color: '--m-ram' }], ...percentAxis }),
+        chart('net', {
+            series: [
+                { key: 'net_down', label: 'Down', color: '--m-down' },
+                { key: 'net_up', label: 'Up', color: '--m-up' },
+            ],
+            axis: speedShort,
+            readout: speed,
+            minPeak: 1024,
+        }),
+    ];
 
     document.getElementById('range-selector').addEventListener('click', (event) => {
         const btn = event.target.closest('button');
@@ -634,7 +693,7 @@ async function start() {
             reorder();
             if (openHost === device.hostname) renderDrawer();
             updateFleet();
-            appendLivePower();
+            appendLive();
         },
     });
 
