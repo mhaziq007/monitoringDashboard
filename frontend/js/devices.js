@@ -47,6 +47,8 @@ const isOnline = (device) => (Date.now() / 1000 - device.seen_at) < OFFLINE_AFTE
 // A VM's draw is either already in its host's reading or, for a cloud
 // instance, not on this lab's bill, so it counts as nothing everywhere.
 const nodePower = (d) => (d.is_vm ? 0 : (d.cpu_power || 0) + (d.gpu?.power || 0));
+const imageUpdates = (d) => (d.docker_containers || []).filter((c) => c.update === 'available').length;
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /**
  * Average CPU, share of memory in use and total network throughput, worked
@@ -219,13 +221,14 @@ function updateCard(device) {
     ref.uptimeValue.title = uptime(device.uptime);
     ref.netValue.textContent = device.network ? speedShort(device.network.down_speed) : '—';
 
-    if (device.pending_updates > 0) {
-        ref.updates.hidden = false;
-        ref.updatesCount.textContent = device.pending_updates;
-        ref.updates.title = `${device.pending_updates} pending OS update(s)`;
-    } else {
-        ref.updates.hidden = true;
-    }
+    const packages = device.pending_updates || 0;
+    const images = imageUpdates(device);
+    ref.updates.hidden = !(packages + images);
+    ref.updatesCount.textContent = packages + images;
+    ref.updates.title = [
+        packages && plural(packages, 'OS package update'),
+        images && plural(images, 'container image update'),
+    ].filter(Boolean).join(', ');
 
     // Chips describe what the drawer holds; only rebuild when that changes.
     const chips = [];
@@ -345,7 +348,8 @@ function updateFleet() {
     const drawing = live.filter((d) => !d.is_vm).length;
     const vms = live.length - drawing;
     const alerting = live.filter(hasAlert).length;
-    const updates = live.reduce((sum, d) => sum + (d.pending_updates || 0), 0);
+    const packages = live.reduce((sum, d) => sum + (d.pending_updates || 0), 0);
+    const images = live.reduce((sum, d) => sum + imageUpdates(d), 0);
 
     const set = (id, value) => {
         const el = document.getElementById(id);
@@ -384,9 +388,11 @@ function updateFleet() {
     set('load-down', load.net_down === null ? '—' : speed(load.net_down));
     set('load-up', load.net_up === null ? '—' : speed(load.net_up));
 
-    set('stat-updates', String(updates));
-    set('stat-updates-foot', updates ? 'Packages pending' : 'Everything current');
-    tone('stat-updates-card', updates ? 'warn' : '');
+    set('stat-updates', String(packages + images));
+    set('stat-updates-foot', packages + images
+        ? [packages && plural(packages, 'package'), images && plural(images, 'image')].filter(Boolean).join(' · ')
+        : 'Everything current');
+    tone('stat-updates-card', packages + images ? 'warn' : '');
 
     empty.hidden = all.length > 0;
 }
@@ -445,6 +451,35 @@ function meterRow(label, pct, note, metric) {
         </div>`;
 }
 
+/**
+ * Container list, outdated images first. The agent checks registries every
+ * few hours; until its first check finishes a container has no update field.
+ */
+function containersSection(device) {
+    const list = [...device.docker_containers]
+        .sort((a, b) => (b.update === 'available') - (a.update === 'available'));
+    const running = list.filter((c) => c.state?.toLowerCase() === 'running').length;
+    const images = imageUpdates(device);
+    const rows = list.map((c) => {
+        const outdated = c.update === 'available';
+        // An outdated image says what to do; otherwise the note (why it could
+        // not be checked) waits in the tooltip.
+        const sub = outdated ? `${c.image} · ${c.update_note}` : c.image;
+        return `
+            <div class="ctr" data-state="${esc((c.state || '').toLowerCase())}" title="${esc(c.update_note || '')}">
+                <span class="ctr__dot"></span>
+                <span class="ctr__main">
+                    <span class="ctr__name">${esc(c.name)}</span>
+                    ${sub ? `<span class="ctr__image">${esc(sub)}</span>` : ''}
+                </span>
+                ${outdated ? '<span class="ctr__update"><i class="fa-solid fa-circle-arrow-up"></i>Update</span>' : ''}
+                <span class="ctr__state">${esc(c.state)}</span>
+            </div>`;
+    }).join('');
+    return section('Containers', 'fa-cube', rows,
+        `${running} of ${list.length} up${images ? ` · ${plural(images, 'update')}` : ''}`);
+}
+
 function renderDrawer() {
     if (!openHost) return;
     const device = nodes.get(openHost);
@@ -469,7 +504,7 @@ function renderDrawer() {
         ${kvItem('Power', power > 0 ? watts(power) : '—', 'power')}
         ${kvItem('Uptime', uptime(device.uptime))}
         ${kvItem('Latency', device.latency != null ? `${device.latency.toFixed(0)} ms` : '—', latencyTone(device.latency))}
-        ${kvItem('Updates', device.pending_updates ?? 0, device.pending_updates ? 'warn' : '')}
+        ${kvItem('OS updates', device.pending_updates ?? 0, device.pending_updates ? 'warn' : '')}
     </div>`, device.is_vm ? 'VM, not in lab power'
         : power > 0 ? `${money(monthlyCost(power))}/mo` : ''));
 
@@ -524,13 +559,7 @@ function renderDrawer() {
         ${vpnRow}`));
 
     if (device.docker_containers?.length) {
-        const running = device.docker_containers.filter((c) => c.state?.toLowerCase() === 'running').length;
-        parts.push(section('Containers', 'fa-cube', device.docker_containers.map((c) => `
-            <div class="ctr" data-state="${esc((c.state || '').toLowerCase())}">
-                <span class="ctr__dot"></span>
-                <span class="ctr__name">${esc(c.name)}</span>
-                <span class="ctr__state">${esc(c.state)}</span>
-            </div>`).join(''), `${running} of ${device.docker_containers.length} up`));
+        parts.push(containersSection(device));
     }
 
     // Content height is stable between ticks, so keeping scrollTop is enough

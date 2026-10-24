@@ -152,7 +152,18 @@ Extracts:
 ---
 
 ### 2.7 Docker Container Discovery
-Executes `docker ps -a --format "{{.Names}}\t{{.State}}"` to list all container names and their live state (`Running`, `Exited`, `Paused`).
+Executes `docker ps -a --format "{{.Names}}\t{{.State}}\t{{.Image}}"` to list all containers with their live state (`Running`, `Exited`, `Paused`) and image.
+
+#### Image update checks
+Every **6 hours** (`DOCKER_UPDATE_INTERVAL`), in a background thread, the agent checks whether each container's image is out of date. Nothing is pulled, restarted or changed.
+1. `docker inspect` gives each container's configured image (`Config.Image`, e.g. `lscr.io/linuxserver/qbittorrent:latest`) and the image it actually runs; `docker image inspect` gives that image's `RepoDigests`.
+2. A `HEAD /v2/<repo>/manifests/<tag>` request asks the image's registry which digest the tag points to now. Anonymous pull tokens are fetched from the registry's `WWW-Authenticate` challenge, and redirects are followed (lscr.io hands requests to ghcr.io). Docker Hub does not count these requests against its pull limit.
+3. Each container then reports `update`:
+   - `available`: the registry has a newer image. `update_note` says whether it is already pulled and the container only needs recreating (`docker compose up -d`).
+   - `current`: the container runs what the tag points to.
+   - `null`: cannot be told. The image is pinned to a digest, was built locally, or the registry needs a login or could not be reached; `update_note` says which.
+
+The dashboard counts outdated images in each node's updates badge and in the Pending updates tile, and lists them first, marked **Update**, in the node's container list.
 
 ---
 

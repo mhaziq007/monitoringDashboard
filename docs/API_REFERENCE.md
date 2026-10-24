@@ -192,14 +192,18 @@ Endpoint for client nodes to push system metrics every 5 seconds.
     "openvpn": false
   },
   "docker_containers": [
-    { "name": "immich_server", "state": "Running" },
-    { "name": "jellyfin", "state": "Running" },
-    { "name": "postgres", "state": "Running" }
+    { "name": "immich_server", "state": "Running", "image": "ghcr.io/immich-app/immich-server:release",
+      "update": "available", "update_note": "Newer image on the registry" },
+    { "name": "jellyfin", "state": "Running", "image": "jellyfin/jellyfin:latest", "update": "current", "update_note": "" },
+    { "name": "postgres", "state": "Running", "image": "postgres:16", "update": null,
+      "update_note": "Could not check: registry unreachable (timed out)" }
   ],
   "pending_updates": 3,
   "is_vm": false
 }
 ```
+Each container's `update` is `available`, `current`, or `null` when it cannot be checked (see the agent guide); `update_note` explains. Both are absent until the agent's first check finishes, a few seconds after it starts.
+
 `is_vm: true` marks a virtual machine. Its `cpu_power` and `gpu.power` are left out of the power history and the dashboard's power and cost totals.
 
 - **Success Response**: `200 OK`
