@@ -88,8 +88,11 @@ export function ago(seconds) {
     return `${Math.floor(s / 86400)}d ago`;
 }
 
+/** A reading under half a watt would round to "0 W"; it is noise, not a reading. */
+export const MIN_WATTS = 0.5;
+
 export function watts(value) {
-    if (!value) return '—';
+    if (!value || value < MIN_WATTS) return '—';
     return `${value.toFixed(0)} W`;
 }
 
