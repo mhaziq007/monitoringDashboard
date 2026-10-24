@@ -191,6 +191,7 @@ The dashboard server checks every node and service itself, so alerts fire with n
 |---|---|---|
 | Node offline | No report for 3 minutes | The node reports again |
 | High CPU | Above 85% for 5 minutes | Below 75% |
+| High RAM | Above 90% for 5 minutes (ZFS cache counts as free) | Below 80% |
 | CPU / GPU temperature | Above 80°C for 5 minutes | Below 72°C |
 | Disk | Over its threshold (90% unless set per disk) | 5 points below it, or its alert is switched off |
 | Service down | Two failed probes in a row (about a minute) | It answers again |

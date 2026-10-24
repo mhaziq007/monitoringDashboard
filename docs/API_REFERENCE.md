@@ -210,6 +210,8 @@ Each container's `update` is `available`, `current`, or `null` when it cannot be
 
 `is_vm: true` marks a virtual machine. Its `cpu_power` and `gpu.power` are left out of the power history and the dashboard's power and cost totals.
 
+`memory.used` and `memory.free` (bytes available) count reclaimable ZFS cache (the ARC above its minimum size) as free, so a ZFS NAS does not read as full. The RAM meter and the RAM alert (above 90% for 5 minutes) use `used / total`.
+
 - **Success Response**: `200 OK`
 ```json
 {

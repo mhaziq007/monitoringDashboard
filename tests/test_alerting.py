@@ -54,6 +54,24 @@ def test_cpu_must_stay_high_for_five_minutes():
     assert titles(engine.check_nodes(T0 + 300, devices, {})) == ["srv CPU at 95%"]
 
 
+def test_ram_alerts_on_memory_in_use_and_clears_below_80():
+    engine = AlertEngine(started_at=T0 - 3600)
+    gb = 1024 ** 3
+    devices = {"srv": node(memory={"total": 32 * gb, "used": 30 * gb, "free": 2 * gb})}
+    for t in range(0, 301, 30):
+        devices["srv"]["last_seen"] = T0 + t
+        events = engine.check_nodes(T0 + t, devices, {})
+    assert titles(events) == ["srv RAM at 94%"]
+    devices["srv"]["memory"]["used"] = 27 * gb          # 84%: inside the hysteresis band
+    devices["srv"]["last_seen"] = T0 + 330
+    assert engine.check_nodes(T0 + 330, devices, {}) == []
+    devices["srv"]["memory"]["used"] = 24 * gb          # 75%
+    devices["srv"]["last_seen"] = T0 + 360
+    assert titles(engine.check_nodes(T0 + 360, devices, {}), "resolved") == ["srv RAM back to 75%"]
+    # A node that reports no memory figures raises nothing.
+    assert alerting.ram_percent({"memory": {"total": 0, "used": 0}}) is None
+
+
 def test_a_short_spike_never_fires_and_hysteresis_holds_it_open():
     engine = AlertEngine(started_at=T0 - 3600)
     devices = {"srv": node(cpu=95)}

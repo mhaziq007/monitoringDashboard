@@ -569,6 +569,7 @@ function evaluateAlerts(device) {
     };
 
     check('cpu', device.cpu_usage, '%');
+    check('ram', device.memory?.total ? (device.memory.used / device.memory.total) * 100 : null, '%');
     check('temp', device.temp, '°C');
     check('gpuUtil', device.gpu?.utilization, '%');
     check('gpuTemp', device.gpu?.temp, '°C');

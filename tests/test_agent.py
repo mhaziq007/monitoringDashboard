@@ -119,3 +119,15 @@ def test_is_vm_auto_falls_back_to_detection(monkeypatch):
     monkeypatch.setattr(agent, "IS_VM_SETTING", "auto")
     monkeypatch.setattr(agent, "detect_vm", lambda: "kvm")
     assert agent.resolve_is_vm() == (True, "detected: kvm")
+
+
+def test_reclaimable_zfs_cache_counts_as_free(tmp_path, monkeypatch):
+    arcstats = tmp_path / "arcstats"
+    arcstats.write_text("13 1 0x01 123 33456 1234 5678\n"
+                        "name                            type data\n"
+                        "size                            4    17179869184\n"
+                        "c_min                           4    1073741824\n")
+    monkeypatch.setattr(agent, "ARCSTATS", str(arcstats))
+    assert agent.zfs_arc_reclaimable() == 15 * 1024 ** 3   # 16 GB of cache above a 1 GB minimum
+    monkeypatch.setattr(agent, "ARCSTATS", str(tmp_path / "missing"))
+    assert agent.zfs_arc_reclaimable() == 0

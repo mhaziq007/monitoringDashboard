@@ -650,6 +650,25 @@ def check_docker_updates():
                                      if remote in repo_digests(ref) else "Newer image on the registry")
     return results
 
+ARCSTATS = "/proc/spl/kstat/zfs/arcstats"
+
+def zfs_arc_reclaimable():
+    """Bytes of ZFS cache (ARC) that would be given back under memory pressure.
+
+    Linux counts the ARC as used memory, so a ZFS NAS looks nearly full when
+    most of that is cache. Everything above the ARC's minimum size counts as
+    free instead. 0 without ZFS."""
+    try:
+        with open(ARCSTATS) as f:
+            stats = {}
+            for line in f:
+                parts = line.split()
+                if len(parts) == 3 and parts[2].isdigit():
+                    stats[parts[0]] = int(parts[2])
+    except OSError:
+        return 0
+    return max(0, stats.get("size", 0) - stats.get("c_min", 0))
+
 def gather_metrics():
     """Gather all detailed system, GPU, storage, VPN, and Docker metrics."""
     hostname = socket.gethostname()
@@ -664,12 +683,13 @@ def gather_metrics():
     # CPU Usage (blocks for 0.5s)
     cpu_usage = psutil.cpu_percent(interval=0.5)
     
-    # Virtual Memory
+    # Virtual Memory, with reclaimable ZFS cache counted as free
     mem = psutil.virtual_memory()
+    arc = zfs_arc_reclaimable()
     memory_info = {
         "total": mem.total,
-        "used": mem.used,
-        "free": mem.available
+        "used": max(0, mem.used - arc),
+        "free": min(mem.total, mem.available + arc)
     }
     
     # Disks (Multiple) and speeds

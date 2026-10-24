@@ -32,6 +32,7 @@ export const monthlyCost = (watts) => (watts / 1000) * 24 * 30 * effectiveRate()
 // metric hovering on the line does not flap between alarm and clear.
 export const THRESHOLDS = {
     cpu:     { trip: 85, clear: 75, label: 'CPU load' },
+    ram:     { trip: 90, clear: 80, label: 'RAM' },
     temp:    { trip: 80, clear: 72, label: 'CPU temperature' },
     gpuUtil: { trip: 85, clear: 75, label: 'GPU load' },
     gpuTemp: { trip: 80, clear: 72, label: 'GPU temperature' },
