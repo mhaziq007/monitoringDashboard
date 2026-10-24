@@ -304,6 +304,162 @@
     gap: var(--s-3);
 }
 
+/* --- Check-ins (Services page) ------------------------------------------ */
+.checkin-form {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: end;
+    gap: var(--s-3);
+    padding: var(--s-4);
+    margin-bottom: var(--s-4);
+}
+
+@media (max-width: 720px) {
+    .checkin-form {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.checkin-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+}
+
+.checkin {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s-3);
+    padding: var(--s-3) var(--s-4);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    min-width: 0;
+}
+
+.checkin[data-state='late'] {
+    border-color: var(--warn-line);
+}
+
+.checkin[data-state='failed'] {
+    border-color: var(--crit-line);
+}
+
+.checkin__status {
+    flex-shrink: 0;
+    min-width: 84px;
+}
+
+.checkin[data-state='ok'] .checkin__status {
+    background: var(--ok-quiet);
+    color: var(--ok);
+}
+
+.checkin[data-state='late'] .checkin__status {
+    background: var(--warn-quiet);
+    color: var(--warn);
+}
+
+.checkin[data-state='failed'] .checkin__status {
+    background: var(--crit-quiet);
+    color: var(--crit);
+}
+
+/* Narrow screens: status and delete on top, details across the full width. */
+@media (max-width: 560px) {
+    .checkin {
+        flex-wrap: wrap;
+        justify-content: space-between;
+    }
+
+    .checkin > .checkin__body {
+        order: 3;
+        flex: 1 1 100%;
+    }
+}
+
+.checkin__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.checkin__name {
+    font-size: var(--t-14);
+    font-weight: 600;
+}
+
+.checkin__meta {
+    font-size: var(--t-12);
+    color: var(--fg-subtle);
+    line-height: 2;
+}
+
+.checkin__meta select {
+    height: 26px;
+    padding: 0 var(--s-1);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    font-size: var(--t-12);
+    color: var(--fg);
+}
+
+.checkin__note {
+    margin: 0;
+    padding: var(--s-2) var(--s-3);
+    background: var(--surface-inset);
+    border-radius: var(--r-md);
+    font-family: var(--font-mono);
+    font-size: var(--t-11);
+    color: var(--crit);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.checkin__url {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    min-width: 0;
+}
+
+.checkin__copy {
+    flex-shrink: 0;
+    font-size: var(--t-11);
+    font-weight: 550;
+    color: var(--accent);
+}
+
+.checkin__copy:hover {
+    text-decoration: underline;
+}
+
+.checkin__url code {
+    font-family: var(--font-mono);
+    font-size: var(--t-11);
+    color: var(--fg-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    user-select: all;
+}
+
+.checkin-help {
+    margin: var(--s-3) 0 var(--s-8);
+    font-size: var(--t-12);
+    line-height: 1.6;
+    color: var(--fg-subtle);
+}
+
+.checkin-help code {
+    font-family: var(--font-mono);
+    font-size: var(--t-11);
+    overflow-wrap: anywhere;
+}
+
 main {
     flex: 1;
     min-width: 0;

@@ -5,6 +5,7 @@ import { mountShell } from './shell.js';
 import { connectStream } from './stream.js';
 import { getJson } from './api.js';
 import { esc, slug, latencyTone } from './format.js';
+import { startCheckins } from './checkins.js';
 
 let services = [];
 let uptime = {};       // name -> { uptime, slots, slot_seconds } for the selected range
@@ -156,6 +157,7 @@ async function start() {
     });
     loadUptime();
     setInterval(loadUptime, 60000);
+    startCheckins();
 
     connectStream({
         services_init: apply,

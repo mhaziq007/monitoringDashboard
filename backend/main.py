@@ -10,9 +10,10 @@ import urllib.request
 from typing import Dict, List
 from fastapi import FastAPI, Request, Header, Query, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+import checkins
 import alerting
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
@@ -111,6 +112,7 @@ def init_db():
 
         # Server-side alert history (alerting.py).
         alerting.create_tables(cursor)
+        checkins.create_tables(cursor)
 
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(power_log)")}
         for column in FLEET_COLUMNS:
@@ -580,6 +582,10 @@ async def maybe_send_digest():
         await asyncio.to_thread(alerting.log_digest, DB_PATH, message, time.time())
         await deliver("Updates available", message, "digest")
 
+async def check_checkins_now():
+    checks = await asyncio.to_thread(checkins.list_all, DB_PATH, time.time())
+    await handle_alert_events(alert_engine.check_checkins(time.time(), checks))
+
 async def alerts_loop():
     """Node rules every 30 s; services are checked after each probe round instead."""
     while True:
@@ -588,6 +594,7 @@ async def alerts_loop():
             disk_settings = await asyncio.to_thread(read_disk_alerts)
             await handle_alert_events(alert_engine.check_nodes(time.time(), devices, disk_settings))
             await maybe_send_digest()
+            await check_checkins_now()
         except Exception as e:
             print(f"Error in alerts loop: {e}")
 
@@ -894,6 +901,69 @@ async def find_telegram_chats(payload: dict, current_user: str = Depends(get_cur
         return {"chats": await asyncio.to_thread(alerting.telegram_chats, token)}
     except Exception as e:
         return {"chats": [], "error": str(e)}
+
+# --- Check-ins (checkins.py) ---------------------------------------------------
+
+CHECKIN_EVERY = (60, 31 * 86400)   # seconds: a minute to a month
+CHECKIN_GRACE = (60, 7 * 86400)
+
+def _checkin_fields(payload: dict, partial: bool) -> dict:
+    fields = {}
+    if "name" in payload or not partial:
+        name = payload.get("name")
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60:
+            raise HTTPException(status_code=400, detail="Give the check-in a name of up to 60 characters")
+        fields["name"] = name.strip()
+    for field, (low, high) in (("every", CHECKIN_EVERY), ("grace", CHECKIN_GRACE)):
+        if field in payload or not partial:
+            value = payload.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
+                raise HTTPException(status_code=400, detail=f"{field} must be {low} to {high} seconds")
+            fields[field] = value
+    return fields
+
+@app.get("/api/checkins")
+async def get_checkins(current_user: str = Depends(get_current_user)):
+    return await asyncio.to_thread(checkins.list_all, DB_PATH, time.time())
+
+@app.post("/api/checkins")
+async def add_checkin(payload: dict, current_user: str = Depends(get_current_user)):
+    """{"name": "Backup to OCI", "every": 86400, "grace": 3600}, in seconds."""
+    fields = _checkin_fields(payload, partial=False)
+    check = await asyncio.to_thread(checkins.create, DB_PATH, fields["name"], fields["every"],
+                                    fields["grace"], time.time())
+    check["state"] = "new"
+    return check
+
+@app.put("/api/checkins/{check_id}")
+async def edit_checkin(check_id: int, payload: dict, current_user: str = Depends(get_current_user)):
+    check = await asyncio.to_thread(checkins.update, DB_PATH, check_id, _checkin_fields(payload, partial=True))
+    if check is None:
+        raise HTTPException(status_code=404, detail="Unknown check-in")
+    check["state"] = checkins.state(check, time.time())
+    await check_checkins_now()   # a longer period can make a late one on time
+    return check
+
+@app.delete("/api/checkins/{check_id}")
+async def remove_checkin(check_id: int, current_user: str = Depends(get_current_user)):
+    if not await asyncio.to_thread(checkins.delete, DB_PATH, check_id):
+        raise HTTPException(status_code=404, detail="Unknown check-in")
+    await check_checkins_now()   # closes its alert, if it had one
+    return {"status": "ok"}
+
+@app.api_route("/ping/{token}", methods=["GET", "POST", "HEAD"])
+@app.api_route("/ping/{token}/{outcome}", methods=["GET", "POST", "HEAD"])
+async def checkin_ping(token: str, request: Request, outcome: str = "ok"):
+    """Called by a job: /ping/<token> when it worked, /ping/<token>/fail when
+    it did not. The token is the only key, so these need no session. A
+    failure's request body (the end of a log, say) goes into the alert."""
+    if outcome not in ("ok", "fail"):
+        raise HTTPException(status_code=404, detail="Use /ping/<token> or /ping/<token>/fail")
+    note = (await request.body()).decode("utf-8", "replace").strip() if outcome == "fail" else ""
+    if not await asyncio.to_thread(checkins.ping, DB_PATH, token, outcome == "ok", note, time.time()):
+        raise HTTPException(status_code=404, detail="Unknown check-in")
+    await check_checkins_now()   # a failure alerts now, not at the next check
+    return PlainTextResponse("OK\n")
 
 @app.get("/api/auth/agent-key")
 async def get_agent_key_endpoint(current_user: str = Depends(get_current_user)):

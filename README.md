@@ -195,8 +195,18 @@ The dashboard server checks every node and service itself, so alerts fire with n
 | Disk | Over its threshold (90% unless set per disk) | 5 points below it, or its alert is switched off |
 | Service down | Two failed probes in a row (about a minute) | It answers again |
 | Updates (daily) | Pending OS packages or container images, once a day at the chosen hour | — |
+| Check-in | A backup or scheduled job is late to report in, or reports a failure | Its next successful check-in |
 
 Every alert and its resolution goes to each channel switched on, and into the history on the Alerts page. If one channel fails, the others still deliver, and the Alerts page shows which one failed and why. The settings, including the tokens, are stored on the dashboard server; tokens are never sent back to a browser.
+
+### Check-ins for backups and scheduled jobs
+
+A job that silently stops running (a backup to `haziq-backupoci`, say) never shows up as down anywhere. On the **Services** page, **Add a check-in** with how often the job runs and how late it may be; it gets its own ping URL. Have the job call that URL when it finishes, and the same URL with `/fail` on the end when it fails:
+```bash
+backup.sh && curl -fsS -m 10 --retry 3 http://192.168.0.107:8000/ping/<token> \
+          || curl -fsS -m 10 --data-raw "$(tail -5 backup.log)" http://192.168.0.107:8000/ping/<token>/fail
+```
+If no ping arrives in time you get "<name> is late"; a `/fail` ping alerts at once, with whatever the job sent in the request body (the end of its log, above). The next successful ping resolves it. The URL's token is its only key, so treat it like a password.
 
 ---
 

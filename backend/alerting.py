@@ -181,7 +181,7 @@ class AlertEngine:
             self._drop(events, now, lambda k, host=host, seen=seen: not k.startswith(f"disk:{host}:") or k in seen)
 
         hosts = set(devices)
-        self._drop(events, now, lambda k: k.startswith("service:") or k.split(":")[1] in hosts)
+        self._drop(events, now, lambda k: k.startswith(("service:", "checkin:")) or k.split(":")[1] in hosts)
         return events
 
     def check_services(self, now: float, services: List[dict]) -> List[Event]:
@@ -205,6 +205,33 @@ class AlertEngine:
                     f"{name} is back up", f"Down for {duration(now - alert['started'])}."),
             )
         self._drop(events, now, lambda k: not k.startswith("service:") or k.split(":", 1)[1] in names)
+        return events
+
+
+    def check_checkins(self, now: float, checks: List[dict]) -> List[Event]:
+        """Check-ins (checkins.py) that are late or reported a failure. Each
+        check carries its current "state"; a good ping resolves it."""
+        events: List[Event] = []
+        ids = set()
+        for check in checks:
+            key = f"checkin:{check['id']}"
+            ids.add(key)
+            name, state = check["name"], check["state"]
+            last = check["last_ping"]
+            self._hold(
+                events, now, key, state in ("late", "failed"), state == "ok", 0,
+                fire=lambda name=name, state=state, last=last, check=check: {
+                    "kind": "checkin", "host": None, "severity": "crit",
+                    "title": f"{name} failed" if state == "failed" else f"{name} is late",
+                    "message": (f"It reported a failure{': ' + check['last_note'] if check['last_note'] else '.'}"
+                                if state == "failed" else
+                                f"No check-in for {duration(now - last)}; expected every {duration(check['every'])}."
+                                if last is not None else
+                                f"No check-in yet, {duration(now - check['created'])} after it was added."),
+                },
+                resolve=lambda alert, name=name: (f"{name} checked in", "It reported success."),
+            )
+        self._drop(events, now, lambda k: not k.startswith("checkin:") or k in ids)
         return events
 
 
