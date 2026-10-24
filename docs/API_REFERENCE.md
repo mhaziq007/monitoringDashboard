@@ -277,6 +277,20 @@ Each disk alerts at 90% unless set otherwise; a media drive meant to fill up can
 
 ---
 
+### 3.3c Mute a Node
+While a node is muted, the server raises no new alerts for it or for the services whose URL points at its IP address or hostname. Alerts already open can still resolve. Mutes survive a server restart.
+
+- **Endpoints**: `GET /api/mutes`, `PUT /api/mutes/{hostname}` and `DELETE /api/mutes/{hostname}`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **PUT body**: `{ "minutes": 60 }` (1 to 10080), or `{ "until_back": true }` for until the node has gone quiet for 30 seconds and reported again, plus 10 minutes (24 hours at most). `404` for an unknown node, `400` for anything else.
+- **Response** (all three): every mute,
+```json
+{ "mhaziq-server": { "since": 1792832400.0, "until": 1792836000.0, "until_back": false, "back": false } }
+```
+`until` is when the mute ends; for an `until_back` mute that has not seen the node come back yet (`back` false), it is the 24-hour limit. Changes are also broadcast as a `mutes` stream event.
+
+---
+
 ### 3.4 Power Draw & Fleet Load History
 Returns time-series lab power and fleet load, downsampled based on the requested window. Each point carries:
 - `power`: watts drawn by online physical nodes (VMs excluded).
@@ -467,6 +481,9 @@ data: {"hostname": "old-nas"}
 
 ##### `disk_alerts`
 Broadcast after a disk's alert threshold changes, with every override (same shape as `GET /api/settings/disk-alerts`).
+
+##### `mutes`
+Sent on connection and whenever a mute starts, changes or ends: every mute (same shape as `GET /api/mutes`).
 
 ##### `services_init`
 Sent upon initial connection containing the full list of monitored services.

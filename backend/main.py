@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import alerting
+import mutes
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -518,6 +519,7 @@ async def check_services_loop():
                 if prune is not None:
                     last_prune = now
                 await asyncio.to_thread(record_service_checks, rows, prune)
+                await refresh_mutes()
                 await handle_alert_events(alert_engine.check_services(now, services_list))
             
             sanitized = get_sanitized_services()
@@ -530,6 +532,19 @@ async def check_services_loop():
 
 alert_engine = alerting.AlertEngine(started_at=time.time())
 _notification_settings_lock = asyncio.Lock()
+
+node_mutes: Dict[str, dict] = {}   # hostname -> mute (see mutes.py), loaded at startup
+
+async def save_mutes():
+    await asyncio.to_thread(mutes.write, DB_PATH, dict(node_mutes))
+    await broadcast("mutes", mutes.public(node_mutes))
+
+async def refresh_mutes():
+    """End mutes that are over, and tell the alert engine what is muted now."""
+    if mutes.advance(node_mutes, devices, time.time()):
+        await save_mutes()
+    alert_engine.muted_hosts = set(node_mutes)
+    alert_engine.muted_services = mutes.services_on(set(node_mutes), devices, services_list)
 
 async def update_notification_settings(change) -> dict:
     """Read-modify-write the stored settings; two writers must not lose a change."""
@@ -585,6 +600,7 @@ async def alerts_loop():
     while True:
         await asyncio.sleep(30.0)
         try:
+            await refresh_mutes()
             disk_settings = await asyncio.to_thread(read_disk_alerts)
             await handle_alert_events(alert_engine.check_nodes(time.time(), devices, disk_settings))
             await maybe_send_digest()
@@ -596,6 +612,7 @@ async def startup_event():
     init_db()
     # Alerts still open from before a restart: tracked again, not re-sent.
     alert_engine.restore(alerting.open_alerts(DB_PATH))
+    node_mutes.update(mutes.read(DB_PATH))
     load_power_history_from_db()
     load_devices_from_db()
     load_services_config()
@@ -790,6 +807,36 @@ async def set_disk_alert(payload: dict, current_user: str = Depends(get_current_
     await broadcast("disk_alerts", alerts)
     return alerts
 
+@app.get("/api/mutes")
+async def get_mutes(current_user: str = Depends(get_current_user)):
+    return mutes.public(node_mutes)
+
+@app.put("/api/mutes/{hostname}")
+async def mute_node(hostname: str, payload: dict, current_user: str = Depends(get_current_user)):
+    """Mute a node's alerts: {"minutes": 60}, or {"until_back": true} for until
+    it has gone down and come back (a reboot)."""
+    if hostname not in devices:
+        raise HTTPException(status_code=404, detail="Unknown device")
+    now = time.time()
+    if payload.get("until_back") is True:
+        node_mutes[hostname] = mutes.until_back(now, devices[hostname])
+    else:
+        minutes = payload.get("minutes")
+        if not (isinstance(minutes, (int, float)) and not isinstance(minutes, bool)
+                and 1 <= minutes <= mutes.LONGEST / 60):
+            raise HTTPException(status_code=400, detail='Send "minutes" (1 to 10080) or "until_back": true')
+        node_mutes[hostname] = mutes.timed(now, minutes * 60)
+    await save_mutes()
+    await refresh_mutes()
+    return mutes.public(node_mutes)
+
+@app.delete("/api/mutes/{hostname}")
+async def unmute_node(hostname: str, current_user: str = Depends(get_current_user)):
+    if node_mutes.pop(hostname, None) is not None:
+        await save_mutes()
+        await refresh_mutes()
+    return mutes.public(node_mutes)
+
 @app.get("/api/alerts")
 async def get_alerts(current_user: str = Depends(get_current_user)):
     history = await asyncio.to_thread(alerting.recent_alerts, DB_PATH)
@@ -919,6 +966,11 @@ async def report_metrics(data: dict, x_agent_key: str = Header(None)):
     else:
         data["latency"] = None
         
+    # A muted node back after a gap (a reboot, say) starts its mute's grace period.
+    previous_report = devices.get(hostname, {}).get("last_seen")
+    if hostname in node_mutes and mutes.note_report(node_mutes[hostname], previous_report, current_time):
+        await save_mutes()
+
     data["last_seen"] = current_time
     devices[hostname] = data
     
@@ -1085,6 +1137,7 @@ async def message_stream(request: Request, token: str = Query(None)):
             yield f"event: init\ndata: {json.dumps(initial_state)}\n\n"
             yield f"event: services_init\ndata: {json.dumps(initial_services)}\n\n"
             yield f"event: alerts\ndata: {json.dumps(alert_engine.snapshot())}\n\n"
+            yield f"event: mutes\ndata: {json.dumps(mutes.public(node_mutes))}\n\n"
             
             while True:
                 if await request.is_disconnected():

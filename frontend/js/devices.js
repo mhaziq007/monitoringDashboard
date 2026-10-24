@@ -6,6 +6,7 @@ import { connectStream } from './stream.js';
 import { api, getJson } from './api.js';
 import { toast, chime, unlockAudioOnInteraction } from './toast.js';
 import { drawSparkline, createTrendChart } from './charts.js';
+import { isMuted, muteBadge, muteTitle, renderMuteBar, wireMuteBar, applyMutes, onMutesChange } from './mutes.js';
 import {
     OFFLINE_AFTER, TARIFF, THRESHOLDS, HISTORY_POINTS,
     effectiveRate, monthlyCost,
@@ -133,6 +134,9 @@ const CARD_TEMPLATE = `
             <div class="node__addr"><span data-r="ip"></span><span class="node__latency" data-r="latency"></span></div>
         </div>
         <div class="node__actions">
+            <span class="badge badge--muted" data-r="muted" hidden>
+                <i class="fa-solid fa-bell-slash"></i><span data-r="mutedText"></span>
+            </span>
             <span class="badge" data-r="updates" hidden>
                 <i class="fa-solid fa-circle-arrow-up"></i><span data-r="updatesCount"></span>
             </span>
@@ -279,6 +283,11 @@ function updateCard(device) {
 
     ref.status.dataset.state = online ? 'online' : 'offline';
     ref.statusText.textContent = online ? 'Online' : 'Offline';
+
+    const muted = muteBadge(device.hostname);
+    ref.muted.hidden = !muted;
+    ref.mutedText.textContent = muted;
+    ref.muted.title = muted ? muteTitle(device.hostname) : '';
 
     ref.ip.textContent = device.ip || 'Unknown address';
     if (device.latency !== undefined && device.latency !== null && online) {
@@ -589,6 +598,8 @@ function evaluateAlerts(device) {
 
     device.alerts = alerts;
 
+    // A muted node is being worked on: the card still shows it, quietly.
+    if (isMuted(device.hostname)) return;
     if (tripped.length) chime();
     tripped.forEach((message) => toast(message, { host: device.hostname, tone: 'crit' }));
     cleared.forEach((message) => toast(message, { host: device.hostname, tone: 'ok' }));
@@ -844,6 +855,7 @@ function renderDrawer() {
     status.querySelector('span').textContent = online ? 'Online' : 'Offline';
     // An online node would be back with its next report, seconds later.
     document.getElementById('drawer-forget').hidden = online;
+    renderMuteBar(document.getElementById('drawer-mute'), device.hostname);
 
     const power = nodePower(device);
     const parts = [];
@@ -1095,6 +1107,11 @@ async function start() {
 
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
     document.getElementById('drawer-forget').addEventListener('click', forgetOpenNode);
+    wireMuteBar(document.getElementById('drawer-mute'));
+    onMutesChange(() => {
+        nodes.forEach(updateCard);
+        renderDrawer();
+    });
     drawer.querySelector('.drawer__scrim').addEventListener('click', closeDrawer);
     window.addEventListener('keydown', (event) => {
         if (event.key === 'Escape' && openHost) closeDrawer();
@@ -1134,6 +1151,7 @@ async function start() {
             updateFleet();
         },
         disk_alerts: applyDiskAlerts,
+        mutes: applyMutes,
         metrics: (device) => {
             ingest(device);
             const stored = nodes.get(device.hostname);
