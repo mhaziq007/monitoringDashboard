@@ -11,7 +11,7 @@ import {
     effectiveRate, monthlyCost,
 } from './config.js';
 import {
-    esc, bytes, bytesShort, speed, speedShort, uptime, uptimeShort, ago, watts, money,
+    esc, bytes, bytesShort, speed, speedShort, uptime, uptimeShort, ago, watts, money, MIN_WATTS,
     loadTone, tempTone, latencyTone, deviceIcon,
 } from './format.js';
 
@@ -314,7 +314,7 @@ function updateCard(device) {
     setTone(ref.tempTile, 'tone', tempTone(temp));
 
     const power = nodePower(device);
-    ref.powerValue.textContent = power > 0 ? watts(power) : '—';
+    ref.powerValue.textContent = watts(power);
     // The tile fits six characters; the full figure is in the drawer and tooltip.
     ref.uptimeValue.textContent = uptimeShort(device.uptime);
     ref.uptimeValue.title = uptime(device.uptime);
@@ -845,12 +845,12 @@ function renderDrawer() {
     parts.push(section('Overview', 'fa-gauge-high', `<div class="kv">
         ${kvItem('CPU', `${(device.cpu_usage ?? 0).toFixed(0)}%`, loadTone(device.cpu_usage ?? 0))}
         ${kvItem('Temp', device.temp != null ? `${device.temp.toFixed(1)}°C` : '—', tempTone(device.temp))}
-        ${kvItem('Power', power > 0 ? watts(power) : '—', 'power')}
+        ${kvItem('Power', watts(power), 'power')}
         ${kvItem('Uptime', uptime(device.uptime))}
         ${kvItem('Latency', device.latency != null ? `${device.latency.toFixed(0)} ms` : '—', latencyTone(device.latency))}
         ${kvItem('OS updates', device.pending_updates ?? 0, device.pending_updates ? 'warn' : '')}
     </div>`, device.is_vm ? 'VM, not in lab power'
-        : power > 0 ? `${money(monthlyCost(power))}/mo` : ''));
+        : power >= MIN_WATTS ? `${money(monthlyCost(power))}/mo` : ''));
 
     const ramPct = device.memory ? (device.memory.used / device.memory.total) * 100 : 0;
     parts.push(section('Compute', 'fa-microchip', `
@@ -887,7 +887,7 @@ function gpuSection(device) {
         ${meterRow('VRAM', vram, `${bytes(gpu.mem_used)} of ${bytes(gpu.mem_total)}`, 'vram')}
         <div class="kv">
             ${kvItem('Temp', gpu.temp != null ? `${gpu.temp.toFixed(0)}°C` : '—', tempTone(gpu.temp))}
-            ${kvItem('Power', gpu.power ? watts(gpu.power) : '—', 'power')}
+            ${kvItem('Power', watts(gpu.power), 'power')}
         </div>`, esc(gpu.name || ''));
 }
 
@@ -902,7 +902,7 @@ function storageSection(device) {
         <div class="disk"${tone ? ` data-tone="${tone}"` : ''}>
             <div class="disk__head">
                 <span class="disk__mount">${esc(disk.mount)}</span>
-                <span class="disk__dev">${esc(disk.device || '')}</span>
+                ${disk.device && disk.device !== disk.mount ? `<span class="disk__dev">${esc(disk.device)}</span>` : ''}
                 <span class="disk__pct">${disk.percent.toFixed(0)}%</span>
             </div>
             <div class="meter meter--lg"><i class="meter__fill" style="width:${Math.min(100, disk.percent)}%"></i></div>
