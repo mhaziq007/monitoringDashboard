@@ -254,6 +254,15 @@ Drops a retired or renamed node from the dashboard and from the stored registry.
 
 ---
 
+### 3.3a Device History
+One node's own CPU %, memory % and network throughput over a range, from the `node_log` table. Buckets match `/api/power-history` for the same range (1 minute for `6h`).
+
+- **Endpoint**: `GET /api/devices/{hostname}/history?range=6h|24h|7d|30d`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **Success Response**: `200 OK`, an array of `{ "time", "cpu", "mem", "net_down", "net_up" }` oldest first; empty for a node with no recorded history. Removing a node also deletes its history.
+
+---
+
 ### 3.4 Power Draw & Fleet Load History
 Returns time-series lab power and fleet load, downsampled based on the requested window. Each point carries:
 - `power`: watts drawn by online physical nodes (VMs excluded).

@@ -192,7 +192,38 @@
                 <i class="fa-solid fa-xmark"></i>
             </button>
         </header>
-        <div class="drawer__body" id="drawer-body"></div>
+        <div class="drawer__body" id="drawer-body">
+            <!-- Built once: the sections below are re-rendered every few
+                 seconds, which would throw these charts away. -->
+            <section>
+                <div class="section__head">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span class="section__title">History</span>
+                    <span class="section__note" id="drawer-history-note">Last 6 hours</span>
+                </div>
+                <div class="section__body drawer__history">
+                <div class="mini">
+                    <div class="mini__label">CPU</div>
+                    <div class="trend__body mini__body">
+                        <canvas class="trend__canvas" id="drawer-cpu-canvas"></canvas><div class="trend__tip" id="drawer-cpu-tip"></div>
+                    </div>
+                </div>
+                <div class="mini">
+                    <div class="mini__label">Memory</div>
+                    <div class="trend__body mini__body">
+                        <canvas class="trend__canvas" id="drawer-mem-canvas"></canvas><div class="trend__tip" id="drawer-mem-tip"></div>
+                    </div>
+                </div>
+                <div class="mini">
+                    <div class="mini__label">Network <span class="legend__item"><i style="background: var(--m-down)"></i>Down</span><span class="legend__item"><i style="background: var(--m-up)"></i>Up</span></div>
+                    <div class="trend__body mini__body">
+                        <canvas class="trend__canvas" id="drawer-net-canvas"></canvas><div class="trend__tip" id="drawer-net-tip"></div>
+                    </div>
+                </div>
+                </div>
+            </section>
+            <div class="drawer__sections" id="drawer-sections"></div>
+        </div>
     </div>
 </aside>
 

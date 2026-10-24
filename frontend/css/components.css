@@ -310,6 +310,31 @@
     height: 120px;
 }
 
+/* --- Mini history charts (one node, on a large card or in the drawer) ---- */
+.mini__label {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    font-size: var(--t-11);
+    font-weight: 600;
+    color: var(--fg-muted);
+}
+
+.mini__label .legend__item {
+    font-weight: 500;
+    color: var(--fg-subtle);
+}
+
+.trend__body.mini__body {
+    height: 84px;
+    padding: 0;
+}
+
+.drawer__history {
+    display: grid;
+    gap: var(--s-3);
+}
+
 .trend__now {
     font-size: var(--t-20);
     font-weight: 600;
@@ -674,6 +699,52 @@
     overflow: hidden;
 }
 
+/* --- Card sizes ----------------------------------------------------------
+   Large spans two columns and carries the drawer's content inline; compact
+   keeps only the head and meters. */
+.node__extra {
+    display: none;
+}
+
+.node[data-size='large'] .node__extra {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+    padding-top: var(--s-4);
+    border-top: 1px solid var(--border-subtle);
+    cursor: default;
+}
+
+.node__history {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--s-4);
+}
+
+.node__details {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: var(--s-4);
+    align-items: start;
+}
+
+/* A long container list scrolls inside the card instead of stretching it. */
+.node__details .section__body {
+    max-height: 260px;
+    overflow-y: auto;
+}
+
+.node[data-size='compact'] :is(.node__meta, .metric__spark, .node__tiles, .node__foot) {
+    display: none;
+}
+
+/* Below this width the grid has a single column for the span to cover. */
+@media (min-width: 800px) {
+    .node[data-size='large'] {
+        grid-column: span 2;
+    }
+}
+
 .node__chips {
     display: flex;
     gap: var(--s-2);
@@ -783,14 +854,18 @@
     font-variant-numeric: tabular-nums;
 }
 
+.drawer__body,
+.drawer__sections {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-5);
+}
+
 .drawer__body {
     flex: 1;
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: var(--s-4);
-    display: flex;
-    flex-direction: column;
-    gap: var(--s-5);
 }
 
 .section__head {

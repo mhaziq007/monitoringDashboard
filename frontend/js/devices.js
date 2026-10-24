@@ -11,7 +11,7 @@ import {
     effectiveRate, monthlyCost,
 } from './config.js';
 import {
-    esc, bytes, bytesShort, speed, speedShort, uptime, uptimeShort, watts, money,
+    esc, bytes, bytesShort, speed, speedShort, uptime, uptimeShort, ago, watts, money,
     loadTone, tempTone, latencyTone, deviceIcon,
 } from './format.js';
 
@@ -20,7 +20,10 @@ import {
 const nodes = new Map();   // hostname -> latest device payload (+ history, alerts)
 const cards = new Map();   // hostname -> { el, ref }
 let pinned = readPinned();
+let sizes = readSizes();     // hostname -> 'large' | 'compact'; absent means normal
 let openHost = null;
+let drawerCharts = [];
+const nodeHistory = new Map();   // hostname -> that node's samples for the selected range
 let charts = [];     // power, CPU, memory and network, all fed from `samples`
 let samples = [];    // history for the selected range, oldest first
 let range = '6h';
@@ -39,6 +42,45 @@ function readPinned() {
 function savePinned() {
     localStorage.setItem('pinnedDevices', JSON.stringify([...pinned]));
 }
+
+function readSizes() {
+    try {
+        return JSON.parse(localStorage.getItem('nodeSizes') || '{}');
+    } catch {
+        return {};
+    }
+}
+
+// Clicking the size button steps through these. A large card spans two
+// columns and shows what the drawer would, so a node you watch closely
+// needs no clicking; a compact one keeps just its meters.
+const SIZES = {
+    normal:  { next: 'large',   icon: 'fa-maximize', title: 'Larger: show details on the card' },
+    large:   { next: 'compact', icon: 'fa-minimize', title: 'Compact: meters only' },
+    compact: { next: 'normal',  icon: 'fa-expand',   title: 'Normal size' },
+};
+
+const PERCENT_CHART = { axis: (v) => `${Math.round(v)}%`, readout: (v) => `${v.toFixed(0)}%`, minPeak: 10, max: 100 };
+const LOAD_CHARTS = {
+    cpu: { series: [{ key: 'cpu', label: 'CPU', color: '--m-cpu' }], ...PERCENT_CHART },
+    mem: { series: [{ key: 'mem', label: 'Memory', color: '--m-ram' }], ...PERCENT_CHART },
+    net: {
+        series: [
+            { key: 'net_down', label: 'Down', color: '--m-down' },
+            { key: 'net_up', label: 'Up', color: '--m-up' },
+        ],
+        axis: speedShort,
+        readout: speed,
+        minPeak: 1024,
+    },
+};
+
+/** Charts for one node's own history, on the given canvas/tooltip pairs. */
+const nodeCharts = (cpu, mem, net) => [
+    createTrendChart(cpu[0], cpu[1], LOAD_CHARTS.cpu),
+    createTrendChart(mem[0], mem[1], LOAD_CHARTS.mem),
+    createTrendChart(net[0], net[1], LOAD_CHARTS.net),
+];
 
 // last_seen is stamped by the server's clock, so comparing it with this
 // browser's clock shifted the offline window by however far the two disagreed.
@@ -88,6 +130,7 @@ const CARD_TEMPLATE = `
             <span class="status" data-r="status" data-state="offline">
                 <i class="status__dot"></i><span data-r="statusText">Offline</span>
             </span>
+            <button class="icon-btn" data-r="size"><i class="fa-solid"></i></button>
             <button class="icon-btn" data-r="pin" title="Pin to top" aria-label="Pin to top">
                 <i class="fa-regular fa-star"></i>
             </button>
@@ -113,6 +156,14 @@ const CARD_TEMPLATE = `
             </div>
             <div class="meter"><i class="meter__fill" data-r="ramBar"></i></div>
         </div>
+        <div class="metric" data-metric="disk" data-r="diskMetric" hidden>
+            <div class="metric__head">
+                <span class="metric__label">Disk</span>
+                <span class="metric__note" data-r="diskNote"></span>
+                <span class="metric__value" data-r="diskValue">—</span>
+            </div>
+            <div class="meter"><i class="meter__fill" data-r="diskBar"></i></div>
+        </div>
     </div>
 
     <div class="node__tiles">
@@ -133,6 +184,30 @@ const CARD_TEMPLATE = `
     <div class="node__foot">
         <div class="node__chips" data-r="chips"></div>
         <span class="node__more">Details <i class="fa-solid fa-arrow-right"></i></span>
+    </div>
+
+    <div class="node__extra" data-r="extra">
+        <div class="node__history">
+            <div class="mini">
+                <div class="mini__label">CPU</div>
+                <div class="trend__body mini__body">
+                    <canvas class="trend__canvas" data-r="histCpu"></canvas><div class="trend__tip" data-r="histCpuTip"></div>
+                </div>
+            </div>
+            <div class="mini">
+                <div class="mini__label">Memory</div>
+                <div class="trend__body mini__body">
+                    <canvas class="trend__canvas" data-r="histMem"></canvas><div class="trend__tip" data-r="histMemTip"></div>
+                </div>
+            </div>
+            <div class="mini">
+                <div class="mini__label">Network <span class="legend__item"><i style="background: var(--m-down)"></i>Down</span><span class="legend__item"><i style="background: var(--m-up)"></i>Up</span></div>
+                <div class="trend__body mini__body">
+                    <canvas class="trend__canvas" data-r="histNet"></canvas><div class="trend__tip" data-r="histNetTip"></div>
+                </div>
+            </div>
+        </div>
+        <div class="node__details" data-r="details"></div>
     </div>`;
 
 function buildCard(device) {
@@ -155,9 +230,18 @@ function buildCard(device) {
         event.stopPropagation();
         togglePin(device.hostname);
     });
+    ref.size.addEventListener('click', (event) => {
+        event.stopPropagation();
+        resizeCard(device.hostname);
+    });
+    // A large card already shows the drawer's content; reading or hovering
+    // its charts should not open the drawer on top of it.
+    ref.extra.addEventListener('click', (event) => event.stopPropagation());
 
     el.addEventListener('click', () => openDrawer(device.hostname));
     el.addEventListener('keydown', (event) => {
+        // Enter on the pin or size button bubbles up here too.
+        if (event.target !== el) return;
         if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
             openDrawer(device.hostname);
@@ -181,6 +265,12 @@ function updateCard(device) {
     ref.pin.firstElementChild.className = pinned.has(device.hostname)
         ? 'fa-solid fa-star' : 'fa-regular fa-star';
 
+    const size = sizes[device.hostname] || 'normal';
+    el.dataset.size = size;
+    ref.size.firstElementChild.className = `fa-solid ${SIZES[size].icon}`;
+    ref.size.title = SIZES[size].title;
+    ref.size.setAttribute('aria-label', SIZES[size].title);
+
     ref.status.dataset.state = online ? 'online' : 'offline';
     ref.statusText.textContent = online ? 'Online' : 'Offline';
 
@@ -188,6 +278,9 @@ function updateCard(device) {
     if (device.latency !== undefined && device.latency !== null && online) {
         ref.latency.textContent = ` · ${device.latency.toFixed(0)} ms`;
         ref.latency.dataset.tone = latencyTone(device.latency);
+    } else if (!online && device.seen_at) {
+        ref.latency.textContent = ` · last seen ${ago(Date.now() / 1000 - device.seen_at)}`;
+        ref.latency.removeAttribute('data-tone');
     } else {
         ref.latency.textContent = '';
         ref.latency.removeAttribute('data-tone');
@@ -253,12 +346,58 @@ function updateCard(device) {
             .join('');
     }
 
+    const disk = fullestDisk(device);
+    ref.diskMetric.hidden = !disk;
+    if (disk) {
+        ref.diskValue.textContent = `${disk.percent.toFixed(0)}%`;
+        ref.diskBar.style.width = `${Math.min(100, disk.percent)}%`;
+        ref.diskNote.textContent = `${disk.mount} · ${bytesShort(disk.used)} / ${bytesShort(disk.total)}`;
+        ref.diskNote.title = 'Fullest disk';
+        setTone(ref.diskMetric, 'load', loadTone(disk.percent));
+    }
+
+    if (size === 'large') {
+        const html = [storageSection(device), networkSection(device), gpuSection(device),
+            device.docker_containers?.length ? containersSection(device) : ''].join('');
+        // Rebuilt only when something shown changed, so a hover tooltip on a
+        // container is not wiped every few seconds.
+        if (html !== entry.detailsHtml) {
+            ref.details.innerHTML = html;
+            entry.detailsHtml = html;
+        }
+    }
+
     el.classList.toggle('is-alerting', online && hasAlert(device));
 
     if (device.cpuHistory?.length > 1) {
         requestAnimationFrame(() => drawSparkline(ref.cpuSpark, device.cpuHistory, '--m-cpu'));
     }
 }
+
+function resizeCard(hostname) {
+    const next = SIZES[sizes[hostname] || 'normal'].next;
+    if (next === 'normal') delete sizes[hostname];
+    else sizes[hostname] = next;
+    localStorage.setItem('nodeSizes', JSON.stringify(sizes));
+
+    const entry = cards.get(hostname);
+    entry.detailsHtml = '';
+    updateCard(nodes.get(hostname));
+    if (next === 'large') showNodeHistory(hostname);
+    // The sparkline canvas changes width with the card.
+    const device = nodes.get(hostname);
+    if (device.cpuHistory?.length > 1) drawSparkline(entry.ref.cpuSpark, device.cpuHistory, '--m-cpu');
+}
+
+/** Disks as reported, falling back to the single "disk" older agents send. */
+function diskList(device) {
+    if (device.disks?.length) return device.disks;
+    if (!device.disk) return [];
+    return [{ mount: '/', device: '', used: device.disk.used, total: device.disk.total,
+              percent: (device.disk.used / device.disk.total) * 100 }];
+}
+
+const fullestDisk = (device) => diskList(device).reduce((top, d) => (!top || d.percent > top.percent ? d : top), null);
 
 /** Set a data attribute only when it changes, and remove it when empty. */
 function setTone(el, attribute, value) {
@@ -331,6 +470,7 @@ function evaluateAlerts(device) {
     check('temp', device.temp, '°C');
     check('gpuUtil', device.gpu?.utilization, '%');
     check('gpuTemp', device.gpu?.temp, '°C');
+    check('disk', fullestDisk(device)?.percent, '%');
 
     device.alerts = alerts;
 
@@ -408,6 +548,7 @@ function openDrawer(hostname) {
     document.body.style.overflow = 'hidden';
     cards.forEach((entry, host) => entry.el.classList.toggle('is-selected', host === hostname));
     renderDrawer();
+    showNodeHistory(hostname);
     // A fresh node starts at the top; only the live refresh keeps its place.
     document.getElementById('drawer-body').scrollTop = 0;
 }
@@ -515,59 +656,104 @@ function renderDrawer() {
         ${meterRow('Memory', ramPct,
             device.memory ? `${bytes(device.memory.used)} of ${bytes(device.memory.total)}` : '', 'ram')}`));
 
-    if (device.gpu) {
-        const gpu = device.gpu;
-        const vram = gpu.mem_total ? (gpu.mem_used / gpu.mem_total) * 100 : 0;
-        parts.push(section('Graphics', 'fa-display', `
-            ${meterRow('GPU load', gpu.utilization ?? 0, '', 'gpu')}
-            ${meterRow('VRAM', vram, `${bytes(gpu.mem_used)} of ${bytes(gpu.mem_total)}`, 'vram')}
-            <div class="kv">
-                ${kvItem('Temp', gpu.temp != null ? `${gpu.temp.toFixed(0)}°C` : '—', tempTone(gpu.temp))}
-                ${kvItem('Power', gpu.power ? watts(gpu.power) : '—', 'power')}
-            </div>`, esc(gpu.name || '')));
-    }
-
-    const disks = device.disks?.length
-        ? device.disks
-        : (device.disk ? [{ mount: '/', device: '', used: device.disk.used, total: device.disk.total,
-                            percent: (device.disk.used / device.disk.total) * 100 }] : []);
-    if (disks.length) {
-        const io = device.disk_speeds
-            ? `R ${speed(device.disk_speeds.read_speed)} · W ${speed(device.disk_speeds.write_speed)}` : '';
-        parts.push(section('Storage', 'fa-hard-drive', disks.map((disk) => `
-            <div class="disk">
-                <div class="disk__head">
-                    <span class="disk__mount">${esc(disk.mount)}</span>
-                    <span class="disk__dev">${esc(disk.device || '')}</span>
-                    <span class="disk__pct">${disk.percent.toFixed(0)}%</span>
-                </div>
-                <div class="meter meter--lg"><i class="meter__fill" style="width:${Math.min(100, disk.percent)}%;background:var(--m-disk)"></i></div>
-                <div class="disk__foot">${bytes(disk.used)} used of ${bytes(disk.total)}</div>
-            </div>`).join(''), io));
-    }
-
-    const vpnRow = device.vpns ? `
-        <div class="vpn-row">
-            <span class="vpn" data-active="${Boolean(device.vpns.tailscale)}"><i class="fa-solid fa-circle-nodes"></i>Tailscale</span>
-            <span class="vpn" data-active="${Boolean(device.vpns.openvpn)}"><i class="fa-solid fa-lock"></i>OpenVPN</span>
-        </div>` : '';
-    parts.push(section('Network', 'fa-arrows-up-down', `
-        <div class="kv">
-            ${kvItem('Download', device.network ? speed(device.network.down_speed) : '—')}
-            ${kvItem('Upload', device.network ? speed(device.network.up_speed) : '—')}
-        </div>
-        ${vpnRow}`));
-
+    parts.push(gpuSection(device), storageSection(device), networkSection(device));
     if (device.docker_containers?.length) {
         parts.push(containersSection(device));
     }
 
     // Content height is stable between ticks, so keeping scrollTop is enough
     // to make the live refresh invisible to someone reading mid-list.
+    // The history charts above these sections stay put; only they refresh.
     const body = document.getElementById('drawer-body');
     const scroll = body.scrollTop;
-    body.innerHTML = parts.join('');
+    document.getElementById('drawer-sections').innerHTML = parts.join('');
     body.scrollTop = scroll;
+}
+
+/* Detail sections shared by the drawer and large cards. */
+
+function gpuSection(device) {
+    const gpu = device.gpu;
+    if (!gpu) return '';
+    const vram = gpu.mem_total ? (gpu.mem_used / gpu.mem_total) * 100 : 0;
+    return section('Graphics', 'fa-display', `
+        ${meterRow('GPU load', gpu.utilization ?? 0, '', 'gpu')}
+        ${meterRow('VRAM', vram, `${bytes(gpu.mem_used)} of ${bytes(gpu.mem_total)}`, 'vram')}
+        <div class="kv">
+            ${kvItem('Temp', gpu.temp != null ? `${gpu.temp.toFixed(0)}°C` : '—', tempTone(gpu.temp))}
+            ${kvItem('Power', gpu.power ? watts(gpu.power) : '—', 'power')}
+        </div>`, esc(gpu.name || ''));
+}
+
+function storageSection(device) {
+    const disks = diskList(device);
+    if (!disks.length) return '';
+    const io = device.disk_speeds
+        ? `R ${speed(device.disk_speeds.read_speed)} · W ${speed(device.disk_speeds.write_speed)}` : '';
+    return section('Storage', 'fa-hard-drive', disks.map((disk) => `
+        <div class="disk">
+            <div class="disk__head">
+                <span class="disk__mount">${esc(disk.mount)}</span>
+                <span class="disk__dev">${esc(disk.device || '')}</span>
+                <span class="disk__pct">${disk.percent.toFixed(0)}%</span>
+            </div>
+            <div class="meter meter--lg"><i class="meter__fill" style="width:${Math.min(100, disk.percent)}%;background:var(--m-disk)"></i></div>
+            <div class="disk__foot">${bytes(disk.used)} used of ${bytes(disk.total)}</div>
+        </div>`).join(''), io);
+}
+
+function networkSection(device) {
+    const vpnRow = device.vpns ? `
+        <div class="vpn-row">
+            <span class="vpn" data-active="${Boolean(device.vpns.tailscale)}"><i class="fa-solid fa-circle-nodes"></i>Tailscale</span>
+            <span class="vpn" data-active="${Boolean(device.vpns.openvpn)}"><i class="fa-solid fa-lock"></i>OpenVPN</span>
+        </div>` : '';
+    return section('Network', 'fa-arrows-up-down', `
+        <div class="kv">
+            ${kvItem('Download', device.network ? speed(device.network.down_speed) : '—')}
+            ${kvItem('Upload', device.network ? speed(device.network.up_speed) : '—')}
+        </div>
+        ${vpnRow}`);
+}
+
+/* --- One node's own history (large cards and the drawer) ----------------- */
+
+/** Hosts whose history is on screen: large cards and the open drawer. */
+const historyHosts = () => new Set([
+    ...[...nodes.keys()].filter((host) => sizes[host] === 'large'),
+    ...(openHost ? [openHost] : []),
+]);
+
+async function loadNodeHistory(hostname) {
+    const asked = range;
+    try {
+        const data = await getJson(`/api/devices/${encodeURIComponent(hostname)}/history?range=${asked}`);
+        if (asked !== range) return;   // the range changed while this was in flight
+        nodeHistory.set(hostname, data);
+    } catch (err) {
+        console.error(`History for ${hostname} failed:`, err);
+        return;
+    }
+    drawNodeHistory(hostname);
+}
+
+function drawNodeHistory(hostname) {
+    const data = nodeHistory.get(hostname) || [];
+    const entry = cards.get(hostname);
+    if (entry && sizes[hostname] === 'large') {
+        entry.charts ||= nodeCharts(
+            [entry.ref.histCpu, entry.ref.histCpuTip],
+            [entry.ref.histMem, entry.ref.histMemTip],
+            [entry.ref.histNet, entry.ref.histNetTip]);
+        entry.charts.forEach((chart) => chart.setData(data, range));
+    }
+    if (openHost === hostname) drawerCharts.forEach((chart) => chart.setData(data, range));
+}
+
+/** Draw what is cached straight away, then fetch the latest. */
+function showNodeHistory(hostname) {
+    drawNodeHistory(hostname);
+    loadNodeHistory(hostname);
 }
 
 /* --- History: lab power and fleet load ----------------------------------- */
@@ -587,6 +773,9 @@ async function loadHistory(nextRange) {
     try {
         samples = await getJson(`/api/power-history?range=${range}`);
         drawCharts();
+        document.getElementById('drawer-history-note').textContent =
+            document.getElementById('trend-sub').textContent;
+        historyHosts().forEach(loadNodeHistory);
     } catch (err) {
         console.error('History request failed:', err);
     }
@@ -635,6 +824,7 @@ function ingest(device) {
 
 function dropNode(hostname) {
     nodes.delete(hostname);
+    nodeHistory.delete(hostname);
     cards.get(hostname)?.el.remove();
     cards.delete(hostname);
     if (openHost === hostname) closeDrawer();
@@ -663,7 +853,10 @@ async function start() {
 
     const chart = (id, opts) => createTrendChart(
         document.getElementById(`${id}-canvas`), document.getElementById(`${id}-tip`), opts);
-    const percentAxis = { axis: (v) => `${Math.round(v)}%`, readout: (v) => `${v.toFixed(0)}%`, minPeak: 10, max: 100 };
+    drawerCharts = nodeCharts(
+        ['drawer-cpu-canvas', 'drawer-cpu-tip'].map((id) => document.getElementById(id)),
+        ['drawer-mem-canvas', 'drawer-mem-tip'].map((id) => document.getElementById(id)),
+        ['drawer-net-canvas', 'drawer-net-tip'].map((id) => document.getElementById(id)));
     charts = [
         chart('trend', {
             series: [{ key: 'power', label: 'Power', color: '--m-power' }],
@@ -671,17 +864,9 @@ async function start() {
             readout: (v) => `${v.toFixed(0)} W`,
             minPeak: 50,
         }),
-        chart('cpu', { series: [{ key: 'cpu', label: 'CPU', color: '--m-cpu' }], ...percentAxis }),
-        chart('mem', { series: [{ key: 'mem', label: 'Memory', color: '--m-ram' }], ...percentAxis }),
-        chart('net', {
-            series: [
-                { key: 'net_down', label: 'Down', color: '--m-down' },
-                { key: 'net_up', label: 'Up', color: '--m-up' },
-            ],
-            axis: speedShort,
-            readout: speed,
-            minPeak: 1024,
-        }),
+        chart('cpu', LOAD_CHARTS.cpu),
+        chart('mem', LOAD_CHARTS.mem),
+        chart('net', LOAD_CHARTS.net),
     ];
 
     document.getElementById('range-selector').addEventListener('click', (event) => {
@@ -711,6 +896,7 @@ async function start() {
             updateFleet();
             // Points appended locally while the server was away are guesses.
             if (reconnected) loadHistory(range);
+            else historyHosts().forEach(loadNodeHistory);
             reconnected = true;
         },
         removed: ({ hostname }) => dropNode(hostname),
@@ -725,6 +911,9 @@ async function start() {
             appendLive();
         },
     });
+
+    // The server records each node once a minute.
+    setInterval(() => historyHosts().forEach(loadNodeHistory), 60000);
 
     // Nothing pushes an "went offline" event, so re-evaluate staleness locally.
     setInterval(() => {

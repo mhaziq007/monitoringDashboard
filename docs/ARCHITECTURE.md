@@ -143,6 +143,18 @@ CREATE INDEX IF NOT EXISTS idx_power_log_timestamp ON power_log(timestamp);
 - **Fleet load columns**: Added after the table first shipped; `init_db()` adds any that are missing with `ALTER TABLE`, and older rows read as `NULL`. Unlike `power`, these include VMs.
 - **Pruning**: A background loop executes `DELETE FROM power_log WHERE timestamp < ?` every 60 seconds to purge entries older than **30 days** (2,592,000 seconds).
 
+#### `node_log`
+Each online node's own load, one row a minute, for its history charts (large cards and the detail drawer).
+```sql
+CREATE TABLE IF NOT EXISTS node_log (
+    hostname TEXT,
+    timestamp REAL,
+    cpu REAL, mem REAL, net_down REAL, net_up REAL
+);
+CREATE INDEX IF NOT EXISTS idx_node_log_host_time ON node_log(hostname, timestamp);
+```
+- **Pruning**: Same 30-day window as `power_log`; removing a node deletes its rows.
+
 #### `devices`
 The last report from every node, as JSON, so the node list survives a restart.
 ```sql

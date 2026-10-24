@@ -176,6 +176,7 @@ Within 5 seconds, the node will appear dynamically on your dashboard grid.
 
 - **Alert Thresholds & Electricity Tariff**: Edit `frontend/js/config.js` to customize CPU/GPU trip points and recovery points, and `TARIFF` for your time-of-use electricity prices (peak and off-peak $/kWh as printed on the bill, peak hours and months, and GST). The running cost uses this month's peak/off-peak blend.
 - **Virtual Machines**: VMs are detected automatically and left out of the lab power and running cost, since their power is either already in the host's reading or (for cloud instances) not on your bill. Override with `HOMELAB_IS_VM=yes|no` in the agent environment, or `--vm yes|no` / `-Vm yes|no` on the install scripts.
+- **Card Sizes**: The size button on each node card cycles **normal → large → compact**. A large card spans two columns and shows the node's history charts, disks, network, GPU and containers inline; a compact one keeps only its meters. Sizes are remembered per browser.
 - **Monitored Services**: Edit `backend/services.json` to add or remove self-hosted web applications.
 - **Hostname Icons**: Extend the heuristic table in `frontend/js/format.js` (`deviceIcon()`) to assign custom icons based on hostname regex patterns.
 - **Theme & Colors**: Modify the CSS custom properties in `frontend/css/tokens.css` to retheme the entire dashboard.

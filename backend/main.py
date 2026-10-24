@@ -56,6 +56,19 @@ def init_db():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_power_log_timestamp ON power_log(timestamp)")
+        # Each online node's own load, one row a minute, for its history charts.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS node_log (
+                hostname TEXT,
+                timestamp REAL,
+                cpu REAL,
+                mem REAL,
+                net_down REAL,
+                net_up REAL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_node_log_host_time ON node_log(hostname, timestamp)")
+
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(power_log)")}
         for column in FLEET_COLUMNS:
             if column not in existing:
@@ -395,6 +408,9 @@ async def record_power_history_loop():
                     total_power += device_power
             
             load = fleet_load(active)
+            # A fleet of one gives a node's own figures.
+            node_rows = [(d.get("hostname"), current_time, *(fleet_load([d])[c] for c in FLEET_COLUMNS))
+                         for d in active]
             power_history.append({
                 "time": current_time,
                 "power": total_power,
@@ -413,9 +429,14 @@ async def record_power_history_loop():
                         f"INSERT INTO power_log (timestamp, power, {', '.join(FLEET_COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?)",
                         (current_time, total_power, *(load[c] for c in FLEET_COLUMNS)))
                     
+                    cursor.executemany(
+                        f"INSERT INTO node_log (hostname, timestamp, {', '.join(FLEET_COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?)",
+                        node_rows)
+
                     # Delete values older than 30 days (30 * 24 * 3600 seconds)
                     limit_time = current_time - (30 * 24 * 3600)
                     cursor.execute("DELETE FROM power_log WHERE timestamp < ?", (limit_time,))
+                    cursor.execute("DELETE FROM node_log WHERE timestamp < ?", (limit_time,))
                     conn.commit()
                     conn.close()
                 except Exception as db_err:
@@ -624,8 +645,40 @@ async def forget_device(hostname: str, current_user: str = Depends(get_current_u
     if devices.pop(hostname, None) is None:
         raise HTTPException(status_code=404, detail="Unknown device")
     await persist_devices_snapshot()
+
+    def drop_history():
+        conn = sqlite3.connect(DB_PATH)
+        with conn:
+            conn.execute("DELETE FROM node_log WHERE hostname = ?", (hostname,))
+        conn.close()
+    await asyncio.to_thread(drop_history)
     await broadcast("removed", {"hostname": hostname})
     return {"status": "ok"}
+
+# Window and bucket size in seconds for each history range.
+HISTORY_RANGES = {"6h": (21600, 60), "24h": (86400, 300), "7d": (604800, 1800), "30d": (2592000, 7200)}
+
+@app.get("/api/devices/{hostname}/history")
+async def get_device_history(hostname: str, range: str = "6h", current_user: str = Depends(get_current_user)):
+    """One node's CPU, memory and network over a range, bucketed like /api/power-history."""
+    span, interval = HISTORY_RANGES.get(range, HISTORY_RANGES["6h"])
+
+    def fetch_data():
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(f"""
+            SELECT CAST(timestamp / ? AS INTEGER) * ? AS grp, {', '.join(f'AVG({c})' for c in FLEET_COLUMNS)}
+            FROM node_log
+            WHERE hostname = ? AND timestamp >= ?
+            GROUP BY grp
+            ORDER BY grp ASC
+        """, (interval, interval, hostname, time.time() - span)).fetchall()
+        conn.close()
+        return [
+            {"time": r[0], **{c: (round(v, 1) if v is not None else None) for c, v in zip(FLEET_COLUMNS, r[1:])}}
+            for r in rows
+        ]
+
+    return await asyncio.to_thread(fetch_data)
 
 @app.get("/api/power-history")
 async def get_power_history(range: str = "6h", current_user: str = Depends(get_current_user)):
@@ -640,20 +693,9 @@ async def get_power_history(range: str = "6h", current_user: str = Depends(get_c
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             
-            # Select grouping interval and start timestamp based on range
-            if range == "24h":
-                start_time = current_time - 86400
-                interval = 300
-            elif range == "7d":
-                start_time = current_time - 604800
-                interval = 1800
-            elif range == "30d":
-                start_time = current_time - 2592000
-                interval = 7200
-            else:
-                start_time = current_time - 21600
-                interval = 60
-                
+            span, interval = HISTORY_RANGES.get(range, HISTORY_RANGES["6h"])
+            start_time = current_time - span
+
             cursor.execute(f"""
                 SELECT CAST(timestamp / ? AS INTEGER) * ? as grp, AVG(power),
                        {', '.join(f'AVG({c})' for c in FLEET_COLUMNS)}

@@ -235,6 +235,12 @@
     gap: var(--s-4);
     padding-bottom: var(--s-12);
     align-content: start;
+    /* A large card that does not fit the rest of a row moves down; dense
+       lets the next normal cards fill the hole it leaves. */
+    grid-auto-flow: dense;
+    /* Cards keep their own height; a large card beside a normal one would
+       otherwise stretch it into a mostly empty box. */
+    align-items: start;
 }
 
 .service-group {
