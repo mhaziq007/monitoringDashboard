@@ -56,6 +56,30 @@ def init_db():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_power_log_timestamp ON power_log(timestamp)")
+        # Every service probe (one row per service every 30 s), for uptime.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS service_log (
+                name TEXT,
+                timestamp REAL,
+                online INTEGER,
+                latency REAL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_service_log_time ON service_log(timestamp)")
+
+        # Each online node's own load, one row a minute, for its history charts.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS node_log (
+                hostname TEXT,
+                timestamp REAL,
+                cpu REAL,
+                mem REAL,
+                net_down REAL,
+                net_up REAL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_node_log_host_time ON node_log(hostname, timestamp)")
+
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(power_log)")}
         for column in FLEET_COLUMNS:
             if column not in existing:
@@ -395,6 +419,9 @@ async def record_power_history_loop():
                     total_power += device_power
             
             load = fleet_load(active)
+            # A fleet of one gives a node's own figures.
+            node_rows = [(d.get("hostname"), current_time, *(fleet_load([d])[c] for c in FLEET_COLUMNS))
+                         for d in active]
             power_history.append({
                 "time": current_time,
                 "power": total_power,
@@ -413,9 +440,14 @@ async def record_power_history_loop():
                         f"INSERT INTO power_log (timestamp, power, {', '.join(FLEET_COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?)",
                         (current_time, total_power, *(load[c] for c in FLEET_COLUMNS)))
                     
+                    cursor.executemany(
+                        f"INSERT INTO node_log (hostname, timestamp, {', '.join(FLEET_COLUMNS)}) VALUES (?, ?, ?, ?, ?, ?)",
+                        node_rows)
+
                     # Delete values older than 30 days (30 * 24 * 3600 seconds)
                     limit_time = current_time - (30 * 24 * 3600)
                     cursor.execute("DELETE FROM power_log WHERE timestamp < ?", (limit_time,))
+                    cursor.execute("DELETE FROM node_log WHERE timestamp < ?", (limit_time,))
                     conn.commit()
                     conn.close()
                 except Exception as db_err:
@@ -426,13 +458,34 @@ async def record_power_history_loop():
         except Exception as e:
             print(f"Error in power history loop: {e}")
 
+def record_service_checks(rows: List[tuple], prune_before: float = None):
+    """Store one round of probes, and drop rounds older than 30 days when asked."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        with conn:
+            conn.executemany("INSERT INTO service_log (name, timestamp, online, latency) VALUES (?, ?, ?, ?)", rows)
+            if prune_before is not None:
+                conn.execute("DELETE FROM service_log WHERE timestamp < ?", (prune_before,))
+        conn.close()
+    except Exception as e:
+        print(f"Error writing service checks: {e}")
+
 async def check_services_loop():
     """Background task to query services status every 30 seconds."""
+    last_prune = 0.0
     while True:
         try:
             tasks = [ping_service(s) for s in services_list]
             if tasks:
                 await asyncio.gather(*tasks)
+                now = time.time()
+                rows = [(s["name"], now, int(s.get("online", False)), s.get("latency") or None)
+                        for s in services_list]
+                # Pruning scans the table, so once an hour is plenty.
+                prune = now - 30 * 86400 if now - last_prune > 3600 else None
+                if prune is not None:
+                    last_prune = now
+                await asyncio.to_thread(record_service_checks, rows, prune)
             
             sanitized = get_sanitized_services()
             await broadcast("services", sanitized)
@@ -624,8 +677,40 @@ async def forget_device(hostname: str, current_user: str = Depends(get_current_u
     if devices.pop(hostname, None) is None:
         raise HTTPException(status_code=404, detail="Unknown device")
     await persist_devices_snapshot()
+
+    def drop_history():
+        conn = sqlite3.connect(DB_PATH)
+        with conn:
+            conn.execute("DELETE FROM node_log WHERE hostname = ?", (hostname,))
+        conn.close()
+    await asyncio.to_thread(drop_history)
     await broadcast("removed", {"hostname": hostname})
     return {"status": "ok"}
+
+# Window and bucket size in seconds for each history range.
+HISTORY_RANGES = {"6h": (21600, 60), "24h": (86400, 300), "7d": (604800, 1800), "30d": (2592000, 7200)}
+
+@app.get("/api/devices/{hostname}/history")
+async def get_device_history(hostname: str, range: str = "6h", current_user: str = Depends(get_current_user)):
+    """One node's CPU, memory and network over a range, bucketed like /api/power-history."""
+    span, interval = HISTORY_RANGES.get(range, HISTORY_RANGES["6h"])
+
+    def fetch_data():
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(f"""
+            SELECT CAST(timestamp / ? AS INTEGER) * ? AS grp, {', '.join(f'AVG({c})' for c in FLEET_COLUMNS)}
+            FROM node_log
+            WHERE hostname = ? AND timestamp >= ?
+            GROUP BY grp
+            ORDER BY grp ASC
+        """, (interval, interval, hostname, time.time() - span)).fetchall()
+        conn.close()
+        return [
+            {"time": r[0], **{c: (round(v, 1) if v is not None else None) for c, v in zip(FLEET_COLUMNS, r[1:])}}
+            for r in rows
+        ]
+
+    return await asyncio.to_thread(fetch_data)
 
 @app.get("/api/power-history")
 async def get_power_history(range: str = "6h", current_user: str = Depends(get_current_user)):
@@ -640,20 +725,9 @@ async def get_power_history(range: str = "6h", current_user: str = Depends(get_c
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
             
-            # Select grouping interval and start timestamp based on range
-            if range == "24h":
-                start_time = current_time - 86400
-                interval = 300
-            elif range == "7d":
-                start_time = current_time - 604800
-                interval = 1800
-            elif range == "30d":
-                start_time = current_time - 2592000
-                interval = 7200
-            else:
-                start_time = current_time - 21600
-                interval = 60
-                
+            span, interval = HISTORY_RANGES.get(range, HISTORY_RANGES["6h"])
+            start_time = current_time - span
+
             cursor.execute(f"""
                 SELECT CAST(timestamp / ? AS INTEGER) * ? as grp, AVG(power),
                        {', '.join(f'AVG({c})' for c in FLEET_COLUMNS)}
@@ -676,6 +750,47 @@ async def get_power_history(range: str = "6h", current_user: str = Depends(get_c
         except Exception as query_err:
             print(f"Error querying power history database: {query_err}")
             return []
+
+    return await asyncio.to_thread(fetch_data)
+
+# Window per uptime range; each is split into this many slots for the bar.
+SERVICE_RANGES = {"24h": 86400, "7d": 604800, "30d": 2592000}
+SERVICE_SLOTS = 48
+
+@app.get("/api/services/history")
+async def get_services_history(range: str = "24h", current_user: str = Depends(get_current_user)):
+    """Uptime per service over a range: an overall percentage plus one entry per
+    slot (share of probes answered and mean latency of the answered ones).
+    A slot with no probes is null, e.g. while the dashboard server was down."""
+    span = SERVICE_RANGES.get(range, SERVICE_RANGES["24h"])
+    slot = span / SERVICE_SLOTS
+    start = time.time() - span
+
+    def fetch_data():
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute("""
+            SELECT name, MIN(CAST((timestamp - ?) / ? AS INTEGER), ?) AS i,
+                   SUM(online), COUNT(*), AVG(CASE WHEN online THEN latency END)
+            FROM service_log
+            WHERE timestamp >= ?
+            GROUP BY name, i
+        """, (start, slot, SERVICE_SLOTS - 1, start)).fetchall()
+        conn.close()
+
+        out = {}
+        for name, i, up, total, latency in rows:
+            entry = out.setdefault(name, {"slots": [None] * SERVICE_SLOTS, "up": 0, "total": 0})
+            entry["slots"][i] = {
+                "start": start + i * slot,
+                "up": up / total,
+                "latency": round(latency, 1) if latency is not None else None,
+            }
+            entry["up"] += up
+            entry["total"] += total
+        return {
+            name: {"uptime": round(100.0 * e["up"] / e["total"], 2), "slots": e["slots"], "slot_seconds": slot}
+            for name, e in out.items()
+        }
 
     return await asyncio.to_thread(fetch_data)
 

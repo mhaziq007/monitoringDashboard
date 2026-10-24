@@ -2,6 +2,9 @@
    still lives in exactly one place. */
 
 const cache = new Map();
+// Registered at import, before any chart's own listener, so redraws after a
+// theme switch read the new colours.
+window.addEventListener('themechange', () => cache.clear());
 
 /** Resolve a CSS custom property once and remember it. */
 function cssVar(name) {
@@ -337,6 +340,7 @@ export function createTrendChart(canvas, tip, opts) {
     canvas.addEventListener('mousemove', onMove);
     canvas.addEventListener('mouseleave', onLeave);
     window.addEventListener('resize', draw);
+    window.addEventListener('themechange', draw);
 
     return {
         setData(nextPoints, nextRange) {

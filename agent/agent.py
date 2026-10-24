@@ -4,7 +4,9 @@ import platform
 import re
 import socket
 import subprocess
+import threading
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 import psutil
@@ -35,6 +37,8 @@ class AgentState:
         self.pending_updates = 0
         self.last_update_check = 0.0
         self.is_vm = False
+        self.docker_updates = {}
+        self.last_docker_check = 0.0
 
 state = AgentState()
 
@@ -480,7 +484,7 @@ def get_docker_containers():
     containers = []
     try:
         result = subprocess.run(
-            ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.State}}"],
+            ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.State}}\t{{.Image}}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -491,15 +495,160 @@ def get_docker_containers():
             lines = result.stdout.strip().split("\n")
             for line in lines:
                 parts = line.split("\t")
-                if len(parts) == 2:
-                    name, state = parts
-                    containers.append({
-                        "name": name,
-                        "state": state.capitalize()
-                    })
+                if len(parts) == 3:
+                    name, status, image = parts
+                    container = {"name": name, "state": status.capitalize(), "image": image}
+                    # Adds update, update_note and the configured image name,
+                    # which docker ps swaps for an ID once the tag has moved.
+                    container.update(state.docker_updates.get(name, {}))
+                    containers.append(container)
     except Exception:
         pass
     return containers
+
+# How often to ask the registries whether each container's image has moved
+# on. Manifest HEAD requests do not count against Docker Hub's pull limit.
+DOCKER_UPDATE_INTERVAL = 6 * 3600
+
+MANIFEST_TYPES = ", ".join([
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+])
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Surface redirects so the caller can follow them with its token."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+_registry_opener = urllib.request.build_opener(_NoRedirect)
+
+def parse_image_ref(ref):
+    """Split an image reference into (registry host, repository, tag).
+
+    Follows Docker's rules: without a registry host the image is on Docker
+    Hub, where a bare name such as "nextcloud" lives under library/.
+    """
+    name, tag = ref, "latest"
+    if ":" in ref.rsplit("/", 1)[-1]:
+        name, tag = ref.rsplit(":", 1)
+    first, _, rest = name.partition("/")
+    if rest and ("." in first or ":" in first or first == "localhost"):
+        registry, repo = first, rest
+    else:
+        registry, repo = "docker.io", name
+    if registry == "docker.io":
+        registry = "registry-1.docker.io"
+        if "/" not in repo:
+            repo = f"library/{repo}"
+    return registry, repo, tag
+
+def _bearer_token(challenge, cache):
+    """Fetch an anonymous pull token for a WWW-Authenticate Bearer challenge."""
+    if not challenge.lower().startswith("bearer "):
+        return None
+    params = dict(re.findall(r'(\w+)="([^"]*)"', challenge))
+    realm = params.pop("realm", None)
+    if not realm:
+        return None
+    url = f"{realm}?{urllib.parse.urlencode(params)}"
+    if url not in cache:
+        req = urllib.request.Request(url, headers={"User-Agent": "HomeLab-Dashboard-Agent"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read())
+        cache[url] = body.get("token") or body.get("access_token")
+    return cache[url]
+
+def registry_digest(ref, tokens):
+    """Digest the registry serves for this image's tag right now."""
+    registry, repo, tag = parse_image_ref(ref)
+    url = f"https://{registry}/v2/{repo}/manifests/{tag}"
+    token = None
+    for _ in range(5):
+        headers = {"Accept": MANIFEST_TYPES, "User-Agent": "HomeLab-Dashboard-Agent"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        req = urllib.request.Request(url, method="HEAD", headers=headers)
+        try:
+            with _registry_opener.open(req, timeout=10) as resp:
+                return resp.headers.get("Docker-Content-Digest")
+        except urllib.error.HTTPError as e:
+            if e.code in (301, 302, 303, 307, 308) and e.headers.get("Location"):
+                # lscr.io, for one, hands manifest requests over to ghcr.io.
+                url = urllib.parse.urljoin(url, e.headers["Location"])
+                continue
+            if e.code == 401 and token is None:
+                token = _bearer_token(e.headers.get("WWW-Authenticate", ""), tokens)
+                if token:
+                    continue
+            raise
+    raise RuntimeError("too many redirects")
+
+def _registry_error(err):
+    if isinstance(err, urllib.error.HTTPError):
+        return {401: "registry needs a login", 403: "registry refused access",
+                404: "tag not found on the registry"}.get(err.code, f"registry answered {err.code}")
+    if isinstance(err, urllib.error.URLError):
+        return f"registry unreachable ({err.reason})"
+    return str(err) or type(err).__name__
+
+def check_docker_updates():
+    """Compare each container's image with what its registry serves now.
+
+    Returns {container name: {"image", "update", "update_note"}}, where update
+    is "available", "current", or None when it cannot be told. Nothing is
+    pulled or restarted.
+    """
+    def docker(*args):
+        return subprocess.run(["docker", *args], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                              text=True, timeout=60, creationflags=creationflags).stdout
+
+    def repo_digests(image):
+        try:
+            found = json.loads(docker("image", "inspect", "--format", "{{json .RepoDigests}}", image) or "null")
+        except ValueError:
+            return set()
+        return {d.split("@", 1)[1] for d in found or [] if "@" in d}
+
+    ids = docker("ps", "-aq", "--no-trunc").split()
+    if not ids:
+        return {}
+    # Config.Image is the reference the container was created from; .Image is
+    # the image it actually runs, which lags behind after a pull until the
+    # container is recreated.
+    rows = [line.split("\t") for line in
+            docker("inspect", "--format", "{{.Name}}\t{{.Config.Image}}\t{{.Image}}", *ids).splitlines()]
+
+    tokens, latest, results = {}, {}, {}
+    for row in rows:
+        if len(row) != 3:
+            continue
+        name, ref, image_id = row[0].lstrip("/"), row[1], row[2]
+        result = {"image": ref, "update": None, "update_note": ""}
+        results[name] = result
+        if "@sha256:" in ref:
+            result["update_note"] = "Pinned to a digest"
+            continue
+        running = repo_digests(image_id)
+        if not running:
+            result["update_note"] = "Built locally; nothing to compare against"
+            continue
+        if ref not in latest:
+            try:
+                latest[ref] = registry_digest(ref, tokens)
+            except Exception as e:
+                latest[ref] = e
+        remote = latest[ref]
+        if isinstance(remote, Exception) or not remote:
+            result["update_note"] = f"Could not check: {_registry_error(remote) if remote else 'no digest returned'}"
+        elif remote in running:
+            result["update"] = "current"
+        else:
+            result["update"] = "available"
+            result["update_note"] = ("Newer image already pulled; recreate the container to use it"
+                                     if remote in repo_digests(ref) else "Newer image on the registry")
+    return results
 
 def gather_metrics():
     """Gather all detailed system, GPU, storage, VPN, and Docker metrics."""
@@ -559,6 +708,15 @@ def gather_metrics():
             except Exception:
                 pass
         threading.Thread(target=run_check, daemon=True).start()
+
+    if docker_containers and now - state.last_docker_check >= DOCKER_UPDATE_INTERVAL:
+        state.last_docker_check = now
+        def run_docker_check():
+            try:
+                state.docker_updates = check_docker_updates()
+            except Exception as e:
+                print(f"Docker update check failed: {e}")
+        threading.Thread(target=run_docker_check, daemon=True).start()
 
     return {
         "hostname": hostname,

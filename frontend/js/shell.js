@@ -1,10 +1,12 @@
-/* Topbar wiring shared by every page: agent key, sign out, link indicator. */
+/* Topbar wiring shared by every page: agent key, theme, sign out, link indicator. */
 
 import { agentKey } from './api.js';
 import { logout } from './auth.js';
+import { mountThemeToggle } from './theme.js';
 
 export function mountShell() {
     mountAgentKey();
+    mountThemeToggle();
 
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) logoutBtn.addEventListener('click', logout);

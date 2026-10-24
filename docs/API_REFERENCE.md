@@ -192,14 +192,18 @@ Endpoint for client nodes to push system metrics every 5 seconds.
     "openvpn": false
   },
   "docker_containers": [
-    { "name": "immich_server", "state": "Running" },
-    { "name": "jellyfin", "state": "Running" },
-    { "name": "postgres", "state": "Running" }
+    { "name": "immich_server", "state": "Running", "image": "ghcr.io/immich-app/immich-server:release",
+      "update": "available", "update_note": "Newer image on the registry" },
+    { "name": "jellyfin", "state": "Running", "image": "jellyfin/jellyfin:latest", "update": "current", "update_note": "" },
+    { "name": "postgres", "state": "Running", "image": "postgres:16", "update": null,
+      "update_note": "Could not check: registry unreachable (timed out)" }
   ],
   "pending_updates": 3,
   "is_vm": false
 }
 ```
+Each container's `update` is `available`, `current`, or `null` when it cannot be checked (see the agent guide); `update_note` explains. Both are absent until the agent's first check finishes, a few seconds after it starts.
+
 `is_vm: true` marks a virtual machine. Its `cpu_power` and `gpu.power` are left out of the power history and the dashboard's power and cost totals.
 
 - **Success Response**: `200 OK`
@@ -250,6 +254,15 @@ Drops a retired or renamed node from the dashboard and from the stored registry.
 
 ---
 
+### 3.3a Device History
+One node's own CPU %, memory % and network throughput over a range, from the `node_log` table. Buckets match `/api/power-history` for the same range (1 minute for `6h`).
+
+- **Endpoint**: `GET /api/devices/{hostname}/history?range=6h|24h|7d|30d`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **Success Response**: `200 OK`, an array of `{ "time", "cpu", "mem", "net_down", "net_up" }` oldest first; empty for a node with no recorded history. Removing a node also deletes its history.
+
+---
+
 ### 3.4 Power Draw & Fleet Load History
 Returns time-series lab power and fleet load, downsampled based on the requested window. Each point carries:
 - `power`: watts drawn by online physical nodes (VMs excluded).
@@ -276,6 +289,29 @@ The load fields are `null` where nothing was recorded, including every sample ta
   { "time": 1725163800.0, "power": 39.0, "cpu": null, "mem": null, "net_down": null, "net_up": null }
 ]
 ```
+
+---
+
+### 3.5a Services Uptime History
+Uptime per service over a range, from the `service_log` table (one row per probe, every 30 seconds).
+
+- **Endpoint**: `GET /api/services/history?range=24h|7d|30d`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **Success Response**: `200 OK`, keyed by service name:
+```json
+{
+  "Jellyfin": {
+    "uptime": 99.93,
+    "slot_seconds": 1800,
+    "slots": [
+      { "start": 1792735622.6, "up": 1.0, "latency": 6.2 },
+      null,
+      { "start": 1792739222.6, "up": 0.95, "latency": 7.9 }
+    ]
+  }
+}
+```
+`slots` always has 48 entries, oldest first; `up` is the share of probes answered and `latency` the mean of the answered ones. A slot with no probes is `null`.
 
 ---
 

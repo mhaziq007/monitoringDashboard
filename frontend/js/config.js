@@ -35,6 +35,7 @@ export const THRESHOLDS = {
     temp:    { trip: 80, clear: 72, label: 'CPU temperature' },
     gpuUtil: { trip: 85, clear: 75, label: 'GPU load' },
     gpuTemp: { trip: 80, clear: 72, label: 'GPU temperature' },
+    disk:    { trip: 90, clear: 85, label: 'Disk usage' },
 };
 
 // Points at which a meter shifts from neutral to amber to red.
