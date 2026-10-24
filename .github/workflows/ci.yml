@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r backend/requirements.txt -r agent/requirements.txt -r requirements-dev.txt
+
+      - name: Tests
+        run: pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Frontend modules parse
+        run: |
+          for f in frontend/js/*.js; do
+            node --input-type=module --check < "$f" || { echo "::error file=$f::does not parse"; exit 1; }
+          done
+
+      - name: Shell scripts parse
+        run: |
+          for f in scripts/*.sh; do
+            bash -n "$f" || { echo "::error file=$f::does not parse"; exit 1; }
+          done

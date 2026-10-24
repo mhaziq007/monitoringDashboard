@@ -185,6 +185,17 @@ Within 5 seconds, the node will appear dynamically on your dashboard grid.
 
 ---
 
+## 🧪 Development
+
+Run the tests from the repository root:
+```bash
+pip install -r backend/requirements.txt -r agent/requirements.txt -r requirements-dev.txt
+pytest
+```
+They cover the server's API (reports, devices, history, disk alert settings, service uptime) and the agent's Docker update checks and VM detection, without touching the network. GitHub Actions runs them on every pull request and push to `main`, along with a parse check of the frontend modules and shell scripts.
+
+---
+
 ## 📝 License
 
 Distributed under the **MIT License**. See LICENSE file for details.
