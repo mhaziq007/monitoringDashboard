@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0a0a0d">
+<script>
+    // Apply the saved theme before first paint; js/theme.js handles changes.
+    try {
+        var choice = localStorage.getItem('theme');
+        document.documentElement.dataset.theme = choice === 'light' || choice === 'dark' ? choice
+            : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    } catch (e) {
+        document.documentElement.dataset.theme = 'dark';
+    }
+</script>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Alerts · HomeLab</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400..700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/layout.css">
+<link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+
+<header class="topbar">
+    <div class="topbar__inner shell">
+        <a class="brand" href="index.html">
+            <span class="brand__mark"><i class="fa-solid fa-server"></i></span>
+            <span class="brand__name">HomeLab <span>Monitor</span></span>
+        </a>
+
+        <nav class="nav" aria-label="Sections">
+            <a class="nav__link" href="index.html"><i class="fa-solid fa-microchip"></i><span>Devices</span></a>
+            <a class="nav__link" href="services.html"><i class="fa-solid fa-circle-nodes"></i><span>Services</span></a>
+            <a class="nav__link is-active" href="alerts.html"><i class="fa-solid fa-bell"></i><span>Alerts</span></a>
+        </nav>
+
+        <div class="topbar__right">
+            <button class="key-chip" id="agent-key" type="button" title="Copy the agent auth key" hidden>
+                <i class="fa-solid fa-key"></i>
+                <span class="key-chip__value" id="agent-key-value">——</span>
+            </button>
+            <button class="icon-btn" id="theme-btn" type="button" title="Theme" aria-label="Theme">
+                <i class="fa-solid fa-circle-half-stroke"></i>
+            </button>
+            <div class="link-state" id="link-state" data-state="idle">
+                <span class="link-state__dot"></span><span class="link-state__label">Connecting</span>
+            </div>
+            <button class="icon-btn icon-btn--danger" id="logout-btn" type="button" title="Sign out" aria-label="Sign out">
+                <i class="fa-solid fa-right-from-bracket"></i>
+            </button>
+        </div>
+    </div>
+</header>
+
+<main class="shell">
+    <div class="page-head">
+        <div>
+            <h1 class="page-head__title">Alerts</h1>
+            <p class="page-head__sub">Raised by the dashboard server, so they fire with no browser open, and sent to your phone through ntfy.</p>
+        </div>
+    </div>
+
+    <div class="fleet">
+        <div class="stat" id="stat-active-card">
+            <span class="stat__label eyebrow"><i class="fa-solid fa-triangle-exclamation"></i>Active</span>
+            <div class="stat__value" id="stat-active">0</div>
+            <div class="stat__foot" id="stat-active-foot">All clear</div>
+        </div>
+        <div class="stat">
+            <span class="stat__label eyebrow"><i class="fa-solid fa-clock-rotate-left"></i>Last 24 hours</span>
+            <div class="stat__value" id="stat-day">0</div>
+            <div class="stat__foot">Alerts raised</div>
+        </div>
+        <div class="stat" id="stat-delivery-card">
+            <span class="stat__label eyebrow"><i class="fa-solid fa-paper-plane"></i>Notifications</span>
+            <div class="stat__value" id="stat-delivery">Off</div>
+            <div class="stat__foot" id="stat-delivery-foot">Set up ntfy below</div>
+        </div>
+    </div>
+
+    <div class="alerts-layout">
+        <div>
+            <div class="section-head">
+                <div>
+                    <h2 class="section-head__title">Active</h2>
+                    <p class="section-head__sub">Conditions holding right now</p>
+                </div>
+            </div>
+            <div class="alert-list" id="active-list"></div>
+
+            <div class="section-head">
+                <div>
+                    <h2 class="section-head__title">History</h2>
+                    <p class="section-head__sub">The last 100, newest first</p>
+                </div>
+            </div>
+            <div class="alert-list" id="history-list"></div>
+        </div>
+
+        <form class="panel settings" id="notify-form" autocomplete="off">
+            <div class="panel__head">
+                <div>
+                    <div class="panel__title">ntfy</div>
+                    <div class="panel__sub">Where alerts are sent. Telegram comes later.</div>
+                </div>
+            </div>
+            <div class="settings__body">
+                <label class="check">
+                    <input type="checkbox" id="ntfy-enabled">
+                    <span>Send alerts to ntfy</span>
+                </label>
+                <div class="field">
+                    <label for="ntfy-url">Topic URL</label>
+                    <input type="url" id="ntfy-url" placeholder="http://192.168.0.105:7070/homelab">
+                    <p class="field__hint">Your ntfy server followed by a topic name. Subscribe to the same topic in the ntfy app.</p>
+                </div>
+                <div class="field">
+                    <label for="ntfy-token">Access token</label>
+                    <input type="password" id="ntfy-token" placeholder="Only if the topic needs one">
+                    <p class="field__hint" id="ntfy-token-hint">Stays on the dashboard server; it is never shown again.</p>
+                    <button type="button" class="link-btn" id="ntfy-token-clear" hidden>Remove the saved token</button>
+                </div>
+                <div class="field">
+                    <label for="click-url">Dashboard link <span class="field__optional">optional</span></label>
+                    <input type="url" id="click-url">
+                    <p class="field__hint">Opened when you tap a notification.</p>
+                </div>
+                <div class="field">
+                    <label for="digest-hour">Daily update summary</label>
+                    <select id="digest-hour"></select>
+                    <p class="field__hint">Pending OS packages and container images, once a day (server time).</p>
+                </div>
+                <p class="settings__status" id="notify-status" hidden></p>
+                <div class="settings__actions">
+                    <button type="submit" class="btn" id="notify-save">Save</button>
+                    <button type="button" class="btn btn--quiet" id="notify-test">Send a test</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</main>
+
+<footer class="foot">
+    <div class="foot__inner shell">
+        <span>HomeLab Monitor</span>
+        <span>Checked every 30 seconds by the dashboard server</span>
+    </div>
+</footer>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<!-- Sign in / first-run registration -->
+<div class="auth" id="auth">
+    <div class="auth__card">
+        <div class="auth__mark"><i class="fa-solid fa-server"></i></div>
+        <h1 class="auth__title" id="auth-title">Sign in</h1>
+        <p class="auth__sub" id="auth-sub">Enter your credentials to reach the lab monitor.</p>
+        <form class="auth__form" id="auth-form">
+            <div class="field">
+                <label for="auth-username">Username</label>
+                <input type="text" id="auth-username" autocomplete="username" required placeholder="admin">
+            </div>
+            <div class="field">
+                <label for="auth-password">Password</label>
+                <input type="password" id="auth-password" autocomplete="current-password" required placeholder="••••••••">
+            </div>
+            <p class="auth__error" id="auth-error"></p>
+            <button type="submit" class="btn" id="auth-submit">
+                <span>Sign in</span><i class="fa-solid fa-arrow-right"></i>
+            </button>
+        </form>
+    </div>
+</div>
+
+<script type="module" src="js/alerts-page.js"></script>
+</body>
+</html>

@@ -684,13 +684,14 @@ async function saveDiskAlert(select) {
 
 /* --- Fleet summary ------------------------------------------------------ */
 
+let serverAlerts = [];   // active alerts raised by the server, sent on the stream
+
 function updateFleet() {
     const all = [...nodes.values()];
     const live = all.filter(isOnline);
     const power = live.reduce((sum, d) => sum + nodePower(d), 0);
     const drawing = live.filter((d) => !d.is_vm).length;
     const vms = live.length - drawing;
-    const alerting = live.filter(hasAlert).length;
     const packages = live.reduce((sum, d) => sum + (d.pending_updates || 0), 0);
     const images = live.reduce((sum, d) => sum + imageUpdates(d), 0);
 
@@ -708,9 +709,14 @@ function updateFleet() {
         ? `${all.length - live.length} offline` : 'All reporting');
     tone('stat-nodes-card', all.length && live.length === all.length ? 'ok' : '');
 
-    set('stat-alerts', String(alerting));
-    set('stat-alerts-foot', alerting ? 'Needs attention' : 'Within thresholds');
-    tone('stat-alerts-card', alerting ? 'crit' : '');
+    // The server's alerts, the ones that reach your phone: they include
+    // offline nodes and down services, which cards alone cannot show.
+    set('stat-alerts', String(serverAlerts.length));
+    set('stat-alerts-foot', serverAlerts.length
+        ? esc(serverAlerts[0].title) + (serverAlerts.length > 1 ? ` and ${serverAlerts.length - 1} more` : '')
+        : 'All clear');
+    tone('stat-alerts-card', !serverAlerts.length ? ''
+        : serverAlerts.some((a) => a.severity === 'crit') ? 'crit' : 'warn');
 
     set('stat-power', `${power.toFixed(0)}<small> W</small>`);
     set('stat-power-foot', `${drawing} node${drawing === 1 ? '' : 's'} drawing`
@@ -1123,6 +1129,10 @@ async function start() {
             reconnected = true;
         },
         removed: ({ hostname }) => dropNode(hostname),
+        alerts: (list) => {
+            serverAlerts = list || [];
+            updateFleet();
+        },
         disk_alerts: applyDiskAlerts,
         metrics: (device) => {
             ingest(device);

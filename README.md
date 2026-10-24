@@ -172,6 +172,23 @@ Within 5 seconds, the node will appear dynamically on your dashboard grid.
 
 ---
 
+## 🔔 Alerts & Notifications
+
+The dashboard server checks every node and service itself, so alerts fire with no browser open, and sends them to your phone through [ntfy](https://ntfy.sh). Set it up on the **Alerts** page: tick *Send alerts to ntfy*, enter your topic URL (e.g. `http://192.168.0.105:7070/homelab`) and, if the topic needs one, an access token, then **Send a test**. Subscribe to the same topic in the ntfy app.
+
+| Alert | Fires when | Resolves when |
+|---|---|---|
+| Node offline | No report for 3 minutes | The node reports again |
+| High CPU | Above 85% for 5 minutes | Below 75% |
+| CPU / GPU temperature | Above 80°C for 5 minutes | Below 72°C |
+| Disk | Over its threshold (90% unless set per disk) | 5 points below it, or its alert is switched off |
+| Service down | Two failed probes in a row (about a minute) | It answers again |
+| Updates (daily) | Pending OS packages or container images, once a day at the chosen hour | — |
+
+Every alert and its resolution goes to ntfy and into the history on the Alerts page. The settings, including the token, are stored on the dashboard server; the token is never sent back to a browser. Telegram is planned as a second channel.
+
+---
+
 ## 🛠️ Configuration & Tunables
 
 - **Alert Thresholds & Electricity Tariff**: Edit `frontend/js/config.js` to customize CPU/GPU trip points and recovery points, and `TARIFF` for your time-of-use electricity prices (peak and off-peak $/kWh as printed on the bill, peak hours and months, and GST). The running cost uses this month's peak/off-peak blend.
