@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+import alerting
+
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.db")
 
 app = FastAPI(title="Home Lab Dashboard API")
@@ -79,6 +81,9 @@ def init_db():
             )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_node_log_host_time ON node_log(hostname, timestamp)")
+
+        # Server-side alert history (alerting.py).
+        alerting.create_tables(cursor)
 
         existing = {row[1] for row in cursor.execute("PRAGMA table_info(power_log)")}
         for column in FLEET_COLUMNS:
@@ -486,6 +491,7 @@ async def check_services_loop():
                 if prune is not None:
                     last_prune = now
                 await asyncio.to_thread(record_service_checks, rows, prune)
+                await handle_alert_events(alert_engine.check_services(now, services_list))
             
             sanitized = get_sanitized_services()
             await broadcast("services", sanitized)
@@ -493,9 +499,74 @@ async def check_services_loop():
             print(f"Error in services loop: {e}")
         await asyncio.sleep(30.0)
 
+# --- Server-side alerts (rules in alerting.py) -------------------------------
+
+alert_engine = alerting.AlertEngine(started_at=time.time())
+_notification_settings_lock = asyncio.Lock()
+
+async def update_notification_settings(change) -> dict:
+    """Read-modify-write the stored settings; two writers must not lose a change."""
+    async with _notification_settings_lock:
+        def apply():
+            settings = alerting.read_settings(DB_PATH)
+            change(settings)
+            alerting.write_settings(DB_PATH, settings)
+            return settings
+        return await asyncio.to_thread(apply)
+
+async def deliver(title: str, message: str, tone: str):
+    """Send to every enabled channel (ntfy so far) and keep the outcome for the UI."""
+    settings = await asyncio.to_thread(alerting.read_settings, DB_PATH)
+    ntfy = settings["ntfy"]
+    if not (ntfy["enabled"] and ntfy["url"]):
+        return
+    try:
+        await asyncio.to_thread(alerting.ntfy_publish, ntfy["url"], ntfy["token"],
+                                title, message, tone, settings["click_url"])
+        outcome = alerting.now_status(True)
+    except Exception as e:
+        print(f"Notification failed: {e}")
+        outcome = alerting.now_status(False, str(e))
+    await update_notification_settings(lambda s: s.update(status=outcome))
+
+async def handle_alert_events(events: List[tuple]):
+    if not events:
+        return
+    await asyncio.to_thread(alerting.log_events, DB_PATH, events, time.time())
+    for kind, alert in events:
+        if kind != "dropped":   # a removed node or service is not news
+            await deliver(*alerting.notification_for(kind, alert))
+    await broadcast("alerts", alert_engine.snapshot())
+
+async def maybe_send_digest():
+    """Once a day, after digest_hour (server local time): pending OS and image updates."""
+    settings = await asyncio.to_thread(alerting.read_settings, DB_PATH)
+    hour, today = settings["digest_hour"], time.strftime("%Y-%m-%d")
+    if hour is None or time.localtime().tm_hour < hour or settings["last_digest"] == today:
+        return
+    # Marked first, so a failing ntfy does not mean a retry every 30 seconds.
+    await update_notification_settings(lambda s: s.update(last_digest=today))
+    message = alerting.build_digest(devices)
+    if message:
+        await asyncio.to_thread(alerting.log_digest, DB_PATH, message, time.time())
+        await deliver("Updates available", message, "digest")
+
+async def alerts_loop():
+    """Node rules every 30 s; services are checked after each probe round instead."""
+    while True:
+        await asyncio.sleep(30.0)
+        try:
+            disk_settings = await asyncio.to_thread(read_disk_alerts)
+            await handle_alert_events(alert_engine.check_nodes(time.time(), devices, disk_settings))
+            await maybe_send_digest()
+        except Exception as e:
+            print(f"Error in alerts loop: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     init_db()
+    # Alerts still open from before a restart: tracked again, not re-sent.
+    alert_engine.restore(alerting.open_alerts(DB_PATH))
     load_power_history_from_db()
     load_devices_from_db()
     load_services_config()
@@ -505,6 +576,7 @@ async def startup_event():
     asyncio.create_task(record_power_history_loop())
     # Start the services loop
     asyncio.create_task(check_services_loop())
+    asyncio.create_task(alerts_loop())
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -678,6 +750,62 @@ async def set_disk_alert(payload: dict, current_user: str = Depends(get_current_
         alerts = await asyncio.to_thread(write)
     await broadcast("disk_alerts", alerts)
     return alerts
+
+@app.get("/api/alerts")
+async def get_alerts(current_user: str = Depends(get_current_user)):
+    history = await asyncio.to_thread(alerting.recent_alerts, DB_PATH)
+    return {"active": alert_engine.snapshot(), "history": history}
+
+@app.get("/api/settings/notifications")
+async def get_notification_settings(current_user: str = Depends(get_current_user)):
+    return alerting.public_settings(await asyncio.to_thread(alerting.read_settings, DB_PATH))
+
+def _is_http_url(value) -> bool:
+    return isinstance(value, str) and (value == "" or value.startswith(("http://", "https://")))
+
+@app.put("/api/settings/notifications")
+async def set_notification_settings(payload: dict, current_user: str = Depends(get_current_user)):
+    """Update the fields present. An ntfy token of null (or absent) keeps the stored one; "" clears it."""
+    ntfy = payload.get("ntfy") or {}
+    if "url" in ntfy and not _is_http_url(ntfy["url"]):
+        raise HTTPException(status_code=400, detail="The ntfy URL must start with http:// or https://")
+    if ntfy.get("token") is not None and not isinstance(ntfy["token"], str):
+        raise HTTPException(status_code=400, detail="The ntfy token must be text")
+    if "enabled" in ntfy and not isinstance(ntfy["enabled"], bool):
+        raise HTTPException(status_code=400, detail="enabled must be true or false")
+    if "click_url" in payload and not _is_http_url(payload["click_url"]):
+        raise HTTPException(status_code=400, detail="The dashboard link must start with http:// or https://")
+    hour = payload.get("digest_hour", "unset")
+    if hour != "unset" and hour is not None and not (isinstance(hour, int) and not isinstance(hour, bool) and 0 <= hour <= 23):
+        raise HTTPException(status_code=400, detail="digest_hour must be 0-23 or null")
+
+    def change(settings):
+        for field in ("url", "enabled"):
+            if field in ntfy:
+                settings["ntfy"][field] = ntfy[field].strip() if field == "url" else ntfy[field]
+        if ntfy.get("token") is not None:
+            settings["ntfy"]["token"] = ntfy["token"].strip()
+        if "click_url" in payload:
+            settings["click_url"] = payload["click_url"].strip()
+        if hour != "unset":
+            settings["digest_hour"] = hour
+
+    return alerting.public_settings(await update_notification_settings(change))
+
+@app.post("/api/notifications/test")
+async def send_test_notification(payload: dict, current_user: str = Depends(get_current_user)):
+    """Send a test to the given topic URL (or the saved one), using the saved token unless one is given."""
+    settings = await asyncio.to_thread(alerting.read_settings, DB_PATH)
+    url = (payload.get("url") or settings["ntfy"]["url"]).strip()
+    token = payload["token"] if isinstance(payload.get("token"), str) and payload["token"] else settings["ntfy"]["token"]
+    if not url:
+        raise HTTPException(status_code=400, detail="Set the ntfy topic URL first")
+    try:
+        await asyncio.to_thread(alerting.ntfy_publish, url, token, "Test from HomeLab Monitor",
+                                "Alerts from your dashboard will arrive here.", "resolved", settings["click_url"])
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
 
 @app.get("/api/auth/agent-key")
 async def get_agent_key_endpoint(current_user: str = Depends(get_current_user)):
@@ -868,6 +996,7 @@ async def message_stream(request: Request, token: str = Query(None)):
         try:
             yield f"event: init\ndata: {json.dumps(initial_state)}\n\n"
             yield f"event: services_init\ndata: {json.dumps(initial_services)}\n\n"
+            yield f"event: alerts\ndata: {json.dumps(alert_engine.snapshot())}\n\n"
             
             while True:
                 if await request.is_disconnected():

@@ -41,6 +41,7 @@
         <nav class="nav" aria-label="Sections">
             <a class="nav__link is-active" href="index.html"><i class="fa-solid fa-microchip"></i><span>Devices</span></a>
             <a class="nav__link" href="services.html"><i class="fa-solid fa-circle-nodes"></i><span>Services</span></a>
+            <a class="nav__link" href="alerts.html"><i class="fa-solid fa-bell"></i><span>Alerts</span></a>
         </nav>
 
         <div class="topbar__right">
@@ -75,11 +76,11 @@
             <div class="stat__value" id="stat-nodes">0<small> / 0</small></div>
             <div class="stat__foot" id="stat-nodes-foot">Waiting for agents</div>
         </div>
-        <div class="stat" id="stat-alerts-card">
+        <a class="stat stat--link" id="stat-alerts-card" href="alerts.html">
             <span class="stat__label eyebrow"><i class="fa-solid fa-triangle-exclamation"></i>Alerts</span>
             <div class="stat__value" id="stat-alerts">0</div>
-            <div class="stat__foot" id="stat-alerts-foot">Within thresholds</div>
-        </div>
+            <div class="stat__foot" id="stat-alerts-foot">All clear</div>
+        </a>
         <div class="stat" data-tone="power">
             <span class="stat__label eyebrow"><i class="fa-solid fa-bolt"></i>Lab power</span>
             <div class="stat__value" id="stat-power">0<small> W</small></div>

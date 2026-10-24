@@ -226,6 +226,15 @@
 .stat[data-tone='power'] .stat__value { color: var(--m-power); }
 
 .stat[data-tone='crit'] { border-color: var(--crit-line); }
+
+.stat--link {
+    transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
+}
+
+.stat--link:hover {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+}
 .stat[data-tone='warn'] { border-color: var(--warn-line); }
 
 /* --- Content grids ------------------------------------------------------ */

@@ -359,6 +359,50 @@ Returns the list of monitored self-hosted web applications with reachability and
 
 ---
 
+### 3.6 Alerts
+Active alerts (raised by the server and not yet resolved) and the last 100 entries of the alert log, newest first.
+
+- **Endpoint**: `GET /api/alerts`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **Success Response**: `200 OK`
+```json
+{
+  "active": [
+    { "key": "offline:haziq-backupoci", "kind": "offline", "host": "haziq-backupoci", "severity": "crit",
+      "title": "haziq-backupoci is offline", "message": "No report for 3 min.", "started": 1792820000.0, "id": 12 }
+  ],
+  "history": [
+    { "id": 11, "key": "service:Homarr", "kind": "service", "host": null, "severity": "crit",
+      "title": "Homarr is down", "message": "No response to 2 probes in a row from the dashboard server.",
+      "started": 1792810000.0, "resolved": 1792810600.0,
+      "resolved_title": "Homarr is back up", "resolved_message": "Down for 10 min." }
+  ]
+}
+```
+`kind` is one of `offline`, `cpu`, `temp`, `gputemp`, `disk`, `service`, or `digest` (the daily update summary, logged with severity `info`).
+
+### 3.7 Notification Settings
+- **Endpoints**: `GET /api/settings/notifications` and `PUT /api/settings/notifications`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **PUT body** (any subset):
+```json
+{
+  "ntfy": { "enabled": true, "url": "http://192.168.0.105:7070/homelab", "token": "tk_..." },
+  "click_url": "http://192.168.0.107:8000/alerts.html",
+  "digest_hour": 9
+}
+```
+`url` is the topic URL. An absent or `null` `token` keeps the stored one and `""` removes it. `digest_hour` is 0-23, or `null` for no daily summary. Invalid values get `400`.
+- **Response** (both): the settings without the token, `{ "ntfy": { "url", "enabled", "has_token" }, "click_url", "digest_hour", "status" }`, where `status` is the outcome of the last delivery, `{ "ok", "at", "error" }`, or `null`.
+
+### 3.8 Send a Test Notification
+- **Endpoint**: `POST /api/notifications/test`
+- **Auth Required**: Yes (`Bearer <token>`)
+- **Body**: `{ "url": "...", "token": "..." }`, both optional; missing ones fall back to the saved settings, so a topic can be tried before saving.
+- **Response**: `{ "ok": true }`, or `{ "ok": false, "error": "ntfy is unreachable (...)" }`.
+
+---
+
 ## 4. Real-Time Streaming (SSE)
 
 ### 4.1 Server-Sent Events Stream
@@ -401,6 +445,9 @@ Sent upon initial connection containing the full list of monitored services.
 event: services_init
 data: [{"name": "Jellyfin", "category": "Media", "online": true, "latency": 3.4}, ...]
 ```
+
+##### `alerts`
+Sent on connection and whenever an alert fires or resolves: the full list of active alerts (same shape as `active` in `GET /api/alerts`).
 
 ##### `services`
 Broadcast every 30 seconds after the background service probe completes.

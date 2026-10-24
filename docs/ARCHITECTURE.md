@@ -156,6 +156,21 @@ CREATE INDEX IF NOT EXISTS idx_service_log_time ON service_log(timestamp);
 ```
 - **Pruning**: Rows older than 30 days, at most once an hour.
 
+#### `alert_log`
+Every alert the server raised (`backend/alerting.py`), and when and how it resolved; the daily update summary is logged here too.
+```sql
+CREATE TABLE IF NOT EXISTS alert_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT, kind TEXT, host TEXT, severity TEXT,
+    title TEXT, message TEXT,
+    started REAL, resolved REAL, resolved_title TEXT, resolved_message TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_alert_log_started ON alert_log(started);
+```
+- **Open alerts** (`resolved IS NULL`) are loaded back at startup, so a restart neither re-sends them nor reports them resolved; nodes get 3 minutes after startup to report in before any counts as offline.
+- **Pruning**: Entries older than 90 days.
+- Notification settings live in the `settings` table under `notifications`.
+
 #### `node_log`
 Each online node's own load, one row a minute, for its history charts (large cards and the detail drawer).
 ```sql
