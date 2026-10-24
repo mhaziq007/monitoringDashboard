@@ -16,12 +16,23 @@ import urllib.error
 import urllib.request
 from typing import Callable, Dict, List, Optional, Tuple
 
+def ram_percent(device: dict) -> Optional[float]:
+    """Memory in use, as the RAM meter shows it (the agent counts reclaimable
+    ZFS cache as free)."""
+    mem = device.get("memory") or {}
+    total, used = mem.get("total"), mem.get("used")
+    if not isinstance(total, (int, float)) or not total or not isinstance(used, (int, float)):
+        return None
+    return used / total * 100
+
+
 # Same trip and clear points as THRESHOLDS in frontend/js/config.js, which
 # colours the meters. Each must hold for HELD seconds before it fires, so a
 # short spike never reaches your phone.
 METRIC_RULES = [
     # kind, label, unit, reading, trip, clear, held (s), severity
     ("cpu", "CPU", "%", lambda d: d.get("cpu_usage"), 85, 75, 300, "warn"),
+    ("mem", "RAM", "%", ram_percent, 90, 80, 300, "warn"),
     ("temp", "CPU temperature", "°C", lambda d: d.get("temp"), 80, 72, 300, "crit"),
     ("gputemp", "GPU temperature", "°C", lambda d: (d.get("gpu") or {}).get("temp"), 80, 72, 300, "crit"),
 ]
