@@ -82,5 +82,59 @@
         "url": "http://192.168.0.104:8006",
         "icon": "fa-apple",
         "category": "Virtualization"
+    },
+    {
+        "name": "qBittorrent",
+        "url": "http://192.168.0.104:8080",
+        "icon": "fa-download",
+        "category": "Downloads"
+    },
+    {
+        "name": "Byparr",
+        "url": "http://192.168.0.104:8191",
+        "icon": "fa-shield-halved",
+        "category": "Arr Stack"
+    },
+    {
+        "name": "Whisparr",
+        "url": "http://192.168.0.104:6969",
+        "icon": "fa-clapperboard",
+        "category": "Arr Stack"
+    },
+    {
+        "name": "Netdata (server)",
+        "url": "http://192.168.0.104:19999",
+        "icon": "fa-chart-area",
+        "category": "Monitoring"
+    },
+    {
+        "name": "Netdata (NAS)",
+        "url": "http://192.168.0.105:19999",
+        "icon": "fa-chart-area",
+        "category": "Monitoring"
+    },
+    {
+        "name": "NetAlertX",
+        "url": "http://192.168.0.105:20211",
+        "icon": "fa-network-wired",
+        "category": "Monitoring"
+    },
+    {
+        "name": "Vaultwarden",
+        "url": "http://192.168.0.105:80",
+        "icon": "fa-vault",
+        "category": "Security"
+    },
+    {
+        "name": "Nextcloud",
+        "url": "http://192.168.0.100:8080",
+        "icon": "fa-cloud",
+        "category": "Files"
+    },
+    {
+        "name": "Homarr",
+        "url": "http://192.168.0.106:7575",
+        "icon": "fa-house",
+        "category": "Dashboards"
     }
 ]
