@@ -632,6 +632,53 @@ async def logout(payload: dict):
             pass
     return {"status": "ok"}
 
+# Per-disk alert thresholds, kept in the settings table as
+# {hostname: {mount: percent | "off"}}. A disk without an entry alerts at the
+# default (THRESHOLDS.disk in frontend/js/config.js).
+_disk_alerts_lock = asyncio.Lock()
+
+def read_disk_alerts() -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT value FROM settings WHERE key = 'disk_alerts'").fetchone()
+    conn.close()
+    return json.loads(row[0]) if row else {}
+
+@app.get("/api/settings/disk-alerts")
+async def get_disk_alerts(current_user: str = Depends(get_current_user)):
+    return await asyncio.to_thread(read_disk_alerts)
+
+@app.put("/api/settings/disk-alerts")
+async def set_disk_alert(payload: dict, current_user: str = Depends(get_current_user)):
+    """Set one disk's threshold: a percent from 50 to 99, "off", or null for the default."""
+    hostname, mount, trip = payload.get("hostname"), payload.get("mount"), payload.get("trip")
+    if not isinstance(hostname, str) or not hostname or not isinstance(mount, str) or not mount:
+        raise HTTPException(status_code=400, detail="hostname and mount are required")
+    valid_percent = isinstance(trip, (int, float)) and not isinstance(trip, bool) and 50 <= trip <= 99
+    if trip is not None and trip != "off" and not valid_percent:
+        raise HTTPException(status_code=400, detail='trip must be 50-99, "off" or null')
+
+    def write():
+        alerts = read_disk_alerts()
+        host = alerts.setdefault(hostname, {})
+        if trip is None:
+            host.pop(mount, None)
+        else:
+            host[mount] = trip
+        if not host:
+            alerts.pop(hostname)
+        conn = sqlite3.connect(DB_PATH)
+        with conn:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('disk_alerts', ?)",
+                         (json.dumps(alerts),))
+        conn.close()
+        return alerts
+
+    # Read-modify-write: two changes at once must not drop one of them.
+    async with _disk_alerts_lock:
+        alerts = await asyncio.to_thread(write)
+    await broadcast("disk_alerts", alerts)
+    return alerts
+
 @app.get("/api/auth/agent-key")
 async def get_agent_key_endpoint(current_user: str = Depends(get_current_user)):
     return {"agent_auth_key": get_agent_auth_key()}
