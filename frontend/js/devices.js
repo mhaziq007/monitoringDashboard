@@ -667,11 +667,18 @@ async function saveDiskAlert(select) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ hostname: host, mount, trip }),
         });
-        if (!response.ok) throw new Error(`responded ${response.status}`);
+        if (!response.ok) {
+            // A server not restarted since the update has no such endpoint:
+            // the request falls through to the static files, which answer
+            // 405 to a PUT. The page itself is new, so this is easy to hit.
+            throw new Error(response.status === 404 || response.status === 405
+                ? 'the dashboard server is running older code. Restart it: sudo systemctl restart homelab-dashboard'
+                : `the server answered ${response.status}`);
+        }
         applyDiskAlerts(await response.json());
     } catch (err) {
         console.error('Saving the disk alert failed:', err);
-        toast('Could not save the disk alert', { host, tone: 'crit' });
+        toast(`Could not save the disk alert: ${err.message}`, { host, tone: 'crit' });
     }
 }
 
