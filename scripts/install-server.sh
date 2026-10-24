@@ -111,7 +111,10 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now "$SERVICE_NAME.service"
+# restart, not enable --now: --now leaves a service that is already running
+# on its old code and settings.
+systemctl enable --quiet "$SERVICE_NAME.service"
+systemctl restart "$SERVICE_NAME.service"
 
 echo "==> Waiting for the database to initialise"
 for _ in $(seq 1 15); do

@@ -155,7 +155,10 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now "$SERVICE_NAME.service"
+# restart, not enable --now: --now leaves a service that is already running
+# on its old code and settings.
+systemctl enable --quiet "$SERVICE_NAME.service"
+systemctl restart "$SERVICE_NAME.service"
 
 sleep 3
 if systemctl is-active --quiet "$SERVICE_NAME.service"; then

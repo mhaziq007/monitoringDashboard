@@ -7,6 +7,8 @@ import { mountThemeToggle } from './theme.js';
 export function mountShell() {
     mountAgentKey();
     mountThemeToggle();
+    checkServerVersion();
+    setInterval(checkServerVersion, 10 * 60 * 1000);
 
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) logoutBtn.addEventListener('click', logout);
@@ -34,6 +36,36 @@ function mountAgentKey() {
             value.textContent = key;
         }, 1600);
     });
+}
+
+/**
+ * After a `git pull` the browser gets the new pages at once, but the server
+ * keeps running the old code until it restarts, so new features fail in
+ * confusing ways. The server reports both commits; say so when they differ.
+ */
+async function checkServerVersion() {
+    let version;
+    try {
+        const response = await fetch('/api/version');
+        if (!response.ok) return;   // a server older than this check
+        version = await response.json();
+    } catch {
+        return;
+    }
+    let banner = document.getElementById('stale-banner');
+    if (!version.stale) {
+        banner?.remove();
+        return;
+    }
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'stale-banner';
+        banner.className = 'stale-banner';
+        document.querySelector('.topbar')?.after(banner);
+    }
+    banner.innerHTML = `<i class="fa-solid fa-rotate"></i><span>The dashboard server is still running older
+        code (${version.running}) than is installed (${version.installed}). On the server, run
+        <code>sudo ./scripts/update.sh</code> or <code>sudo systemctl restart homelab-dashboard</code>.</span>`;
 }
 
 /** Reflect stream health in the topbar: connecting / live / down. */

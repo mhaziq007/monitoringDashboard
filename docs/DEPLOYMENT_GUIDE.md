@@ -176,8 +176,22 @@ C:\Tools\homelab-agent\scripts\install-agent.ps1 -Server http://<server-ip>:8000
 ```
 
 Both write the configuration outside `agent.py` (`/etc/homelab-agent.env` on
-Linux, a generated `run-agent.cmd` on Windows), so the checkout stays clean and
-`git pull` + re-running the script is enough to update a node.
+Linux, a generated `run-agent.cmd` on Windows), so the checkout stays clean.
+Re-running either install script restarts a service that is already running,
+so new settings always take effect.
+
+### Updating a node
+
+On Linux nodes, `sudo ./scripts/update.sh` pulls the latest code, updates the
+virtualenv's packages and restarts whichever of `homelab-dashboard` and
+`homelab-agent` is installed there. It restarts even when there was nothing
+new, and refuses to run over local changes to tracked files. `--branch <name>`
+switches to a branch first. On Windows, `git pull` and re-run
+`install-agent.ps1`.
+
+A `git pull` without a restart leaves the server running older code than the
+pages it serves; the dashboard detects that (`GET /api/version`) and shows a
+banner with the command to run.
 
 The manual steps below are the same thing by hand.
 
