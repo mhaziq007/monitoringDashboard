@@ -151,3 +151,122 @@ def test_ntfy_url_without_a_topic_is_rejected():
     import pytest
     with pytest.raises(ValueError):
         alerting.ntfy_publish("http://192.168.0.105:7070", "", "t", "m", "crit")
+
+
+TOKEN = "123456789:AAH-test_token"
+
+
+class FakeBotApi:
+    """Stands in for urlopen: records each call and answers like the Bot API."""
+
+    def __init__(self, result=True, status=200, description="", retry_after=None):
+        self.calls, self.result, self.description = [], result, description
+        # One status for every call, or a list taken in turn.
+        self.statuses = status if isinstance(status, list) else None
+        self.status, self.retry_after = status, retry_after
+
+    def __call__(self, req, timeout):
+        import io
+        import json
+        self.calls.append((req.full_url, json.loads(req.data)))
+        status = self.statuses.pop(0) if self.statuses is not None else self.status
+        if status != 200:
+            answer = {"ok": False, "description": self.description}
+            if self.retry_after is not None:
+                answer["parameters"] = {"retry_after": self.retry_after}
+            raise alerting.urllib.error.HTTPError(req.full_url, status, "error", {},
+                                                  io.BytesIO(json.dumps(answer).encode()))
+        test = self
+
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self): return json.dumps({"ok": True, "result": test.result}).encode()
+        return Response()
+
+
+def test_telegram_send_escapes_html_and_mutes_good_news(monkeypatch):
+    api = FakeBotApi()
+    monkeypatch.setattr(alerting.urllib.request, "urlopen", api)
+    alerting.telegram_send(TOKEN, "42", "srv <disk> at 95%", "Free: 10 GB & falling", "crit",
+                           click="http://192.168.0.107:8000/alerts.html")
+    alerting.telegram_send(TOKEN, "42", "srv is back online", "", "resolved")
+    (url, alert), (_, resolved) = api.calls
+    assert url == f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    assert alert["chat_id"] == "42" and alert["parse_mode"] == "HTML"
+    assert alert["text"] == ("🚨 <b>srv &lt;disk&gt; at 95%</b>\nFree: 10 GB &amp; falling\n"
+                             '<a href="http://192.168.0.107:8000/alerts.html">Open the dashboard</a>')
+    assert alert["disable_notification"] is False
+    assert resolved["text"] == "✅ <b>srv is back online</b>"
+    assert resolved["disable_notification"] is True
+
+
+def test_telegram_rejects_bad_tokens_and_chats_before_any_request(monkeypatch):
+    import pytest
+    api = FakeBotApi()
+    monkeypatch.setattr(alerting.urllib.request, "urlopen", api)
+    with pytest.raises(ValueError):
+        alerting.telegram_send("not-a-token", "42", "t", "m", "crit")
+    with pytest.raises(ValueError):
+        alerting.telegram_send(TOKEN, "my chat", "t", "m", "crit")
+    assert api.calls == []
+
+
+def test_telegram_errors_explain_the_fix_and_never_show_the_token(monkeypatch):
+    import pytest
+    for status, description, expected in [
+        (401, "Unauthorized", "rejected the bot token"),
+        (400, "Bad Request: chat not found", "Find my chat"),
+        (403, "Forbidden: bot was blocked by the user", "blocked"),
+    ]:
+        monkeypatch.setattr(alerting.urllib.request, "urlopen", FakeBotApi(status=status, description=description))
+        with pytest.raises(RuntimeError) as err:
+            alerting.telegram_send(TOKEN, "42", "t", "m", "crit")
+        assert expected in str(err.value)
+        assert TOKEN not in str(err.value) and err.value.__cause__ is None
+
+
+def test_a_short_rate_limit_is_waited_out_once(monkeypatch):
+    import pytest
+    waits = []
+    monkeypatch.setattr(alerting.time, "sleep", waits.append)
+    api = FakeBotApi(status=[429, 200], description="Too Many Requests: retry after 3", retry_after=3)
+    monkeypatch.setattr(alerting.urllib.request, "urlopen", api)
+    alerting.telegram_send(TOKEN, "42", "t", "m", "crit")
+    assert waits == [3] and len(api.calls) == 2
+    # Still limited after the wait, or told to wait too long: give up.
+    for statuses, retry_after in [([429, 429], 3), ([429], 600)]:
+        monkeypatch.setattr(alerting.urllib.request, "urlopen",
+                            FakeBotApi(status=statuses, description="Too Many Requests", retry_after=retry_after))
+        with pytest.raises(RuntimeError, match="rate limiting"):
+            alerting.telegram_send(TOKEN, "42", "t", "m", "crit")
+
+
+def test_telegram_chats_lists_each_chat_once_newest_first(monkeypatch):
+    updates = [
+        {"update_id": 1, "message": {"chat": {"id": 42, "type": "private", "first_name": "Haziq"}}},
+        {"update_id": 2, "message": {"chat": {"id": -1001, "type": "group", "title": "Homelab"}}},
+        {"update_id": 3, "edited_message": {"chat": {"id": 42, "type": "private", "first_name": "Haziq"}}},
+        {"update_id": 4, "my_chat_member": {"chat": {"id": -1002, "type": "channel", "title": "Alerts"}}},
+    ]
+    monkeypatch.setattr(alerting.urllib.request, "urlopen", FakeBotApi(result=updates))
+    chats = alerting.telegram_chats(TOKEN)
+    assert [(c["id"], c["name"], c["type"]) for c in chats] == [
+        ("-1002", "Alerts", "channel"), ("42", "Haziq", "private"), ("-1001", "Homelab", "group")]
+
+
+def test_settings_from_before_telegram_keep_their_ntfy_status(tmp_path):
+    import json
+    import sqlite3
+    path = str(tmp_path / "history.db")
+    conn = sqlite3.connect(path)
+    with conn:
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+        conn.execute("INSERT INTO settings VALUES ('notifications', ?)", (json.dumps({
+            "ntfy": {"url": "http://nas:7070/homelab", "token": "", "enabled": True},
+            "status": {"ok": False, "at": 5, "error": "refused"}}),))
+    conn.close()
+    settings = alerting.read_settings(path)
+    assert settings["status"] == {"ntfy": {"ok": False, "at": 5, "error": "refused"}}
+    assert settings["telegram"] == {"token": "", "chat_id": "", "enabled": False}
+    assert alerting.channel_ready(settings, "ntfy") and not alerting.channel_ready(settings, "telegram")

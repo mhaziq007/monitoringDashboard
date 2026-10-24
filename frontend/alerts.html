@@ -66,7 +66,7 @@
     <div class="page-head">
         <div>
             <h1 class="page-head__title">Alerts</h1>
-            <p class="page-head__sub">Raised by the dashboard server, so they fire with no browser open, and sent to your phone through ntfy.</p>
+            <p class="page-head__sub">Raised by the dashboard server, so they fire with no browser open, and sent to your phone through ntfy and Telegram.</p>
         </div>
     </div>
 
@@ -84,7 +84,7 @@
         <div class="stat" id="stat-delivery-card">
             <span class="stat__label eyebrow"><i class="fa-solid fa-paper-plane"></i>Notifications</span>
             <div class="stat__value" id="stat-delivery">Off</div>
-            <div class="stat__foot" id="stat-delivery-foot">Set up ntfy below</div>
+            <div class="stat__foot" id="stat-delivery-foot">Set up a channel below</div>
         </div>
     </div>
 
@@ -110,26 +110,60 @@
         <form class="panel settings" id="notify-form" autocomplete="off">
             <div class="panel__head">
                 <div>
-                    <div class="panel__title">ntfy</div>
-                    <div class="panel__sub">Where alerts are sent. Telegram comes later.</div>
+                    <div class="panel__title">Notifications</div>
+                    <div class="panel__sub">Every alert goes to each channel switched on.</div>
                 </div>
             </div>
             <div class="settings__body">
-                <label class="check">
-                    <input type="checkbox" id="ntfy-enabled">
-                    <span>Send alerts to ntfy</span>
-                </label>
-                <div class="field">
-                    <label for="ntfy-url">Topic URL</label>
-                    <input type="url" id="ntfy-url" placeholder="http://192.168.0.105:7070/homelab">
-                    <p class="field__hint">Your ntfy server followed by a topic name. Subscribe to the same topic in the ntfy app.</p>
-                </div>
-                <div class="field">
-                    <label for="ntfy-token">Access token</label>
-                    <input type="password" id="ntfy-token" placeholder="Only if the topic needs one">
-                    <p class="field__hint" id="ntfy-token-hint">Stays on the dashboard server; it is never shown again.</p>
-                    <button type="button" class="link-btn" id="ntfy-token-clear" hidden>Remove the saved token</button>
-                </div>
+                <fieldset class="channel">
+                    <legend class="channel__title"><i class="fa-solid fa-bell"></i>ntfy</legend>
+                    <label class="check">
+                        <input type="checkbox" id="ntfy-enabled">
+                        <span>Send alerts to ntfy</span>
+                    </label>
+                    <div class="field">
+                        <label for="ntfy-url">Topic URL</label>
+                        <input type="url" id="ntfy-url" placeholder="http://192.168.0.105:7070/homelab">
+                        <p class="field__hint">Your ntfy server followed by a topic name. Subscribe to the same topic in the ntfy app.</p>
+                    </div>
+                    <div class="field">
+                        <label for="ntfy-token">Access token <span class="field__optional">optional</span></label>
+                        <input type="password" id="ntfy-token" placeholder="Only if the topic needs one">
+                        <button type="button" class="link-btn" id="ntfy-token-clear" hidden>Remove the saved token</button>
+                    </div>
+                    <p class="settings__status" id="ntfy-status" hidden></p>
+                    <button type="button" class="btn btn--quiet" id="ntfy-test">Send a test to ntfy</button>
+                </fieldset>
+
+                <fieldset class="channel">
+                    <legend class="channel__title"><i class="fa-brands fa-telegram"></i>Telegram</legend>
+                    <label class="check">
+                        <input type="checkbox" id="telegram-enabled">
+                        <span>Send alerts to Telegram</span>
+                    </label>
+                    <ol class="channel__steps">
+                        <li>In Telegram, message <b>@BotFather</b>, send <code>/newbot</code> and copy the token it gives you.</li>
+                        <li>Paste the token below, then send your new bot any message.</li>
+                        <li>Click <b>Find my chat</b> and pick yours.</li>
+                    </ol>
+                    <div class="field">
+                        <label for="telegram-token">Bot token</label>
+                        <input type="password" id="telegram-token" placeholder="123456789:AA...">
+                        <button type="button" class="link-btn" id="telegram-token-clear" hidden>Remove the saved token</button>
+                    </div>
+                    <div class="field">
+                        <label for="telegram-chat">Chat ID</label>
+                        <div class="field__row">
+                            <input type="text" id="telegram-chat" inputmode="numeric" placeholder="123456789">
+                            <button type="button" class="btn btn--quiet btn--small" id="telegram-find">Find my chat</button>
+                        </div>
+                        <select id="telegram-chats" hidden></select>
+                    </div>
+                    <p class="settings__status" id="telegram-status" hidden></p>
+                    <button type="button" class="btn btn--quiet" id="telegram-test">Send a test to Telegram</button>
+                </fieldset>
+
+                <p class="field__hint">Tokens stay on the dashboard server and are never shown again.</p>
                 <div class="field">
                     <label for="click-url">Dashboard link <span class="field__optional">optional</span></label>
                     <input type="url" id="click-url">
@@ -140,10 +174,8 @@
                     <select id="digest-hour"></select>
                     <p class="field__hint">Pending OS packages and container images, once a day (server time).</p>
                 </div>
-                <p class="settings__status" id="notify-status" hidden></p>
                 <div class="settings__actions">
                     <button type="submit" class="btn" id="notify-save">Save</button>
-                    <button type="button" class="btn btn--quiet" id="notify-test">Send a test</button>
                 </div>
             </div>
         </form>

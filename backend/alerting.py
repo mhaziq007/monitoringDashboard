@@ -7,7 +7,9 @@ alerts wait until a condition has held for a while, because they reach your
 phone.
 """
 
+import html
 import json
+import re
 import sqlite3
 import time
 import urllib.error
@@ -291,14 +293,23 @@ def log_digest(db_path: str, message: str, now: float):
     conn.close()
 
 
-# --- Notification settings and ntfy delivery ----------------------------------
+# --- Notification settings and delivery: ntfy and Telegram --------------------
+
+CHANNELS = ("ntfy", "telegram")
+TELEGRAM_API = "https://api.telegram.org"   # tests point this at a stand-in
+
+# A bot token goes into the Bot API's URL path, so nothing else is accepted.
+TELEGRAM_TOKEN = re.compile(r"^\d+:[A-Za-z0-9_-]+$")
+# A numeric chat ID (negative for groups and channels) or a public @channel.
+TELEGRAM_CHAT = re.compile(r"^(-?\d+|@[A-Za-z0-9_]{5,})$")
 
 DEFAULT_SETTINGS = {
     "ntfy": {"url": "", "token": "", "enabled": False},
+    "telegram": {"token": "", "chat_id": "", "enabled": False},
     "click_url": "",       # opened when a notification is tapped, e.g. http://192.168.0.107:8000/alerts.html
     "digest_hour": 9,      # local hour for the daily update summary; None turns it off
     "last_digest": "",     # date the summary last went out, so a restart does not repeat it
-    "status": None,        # outcome of the last delivery: {"ok", "at", "error"}
+    "status": {},          # channel -> outcome of its last delivery: {"ok", "at", "error"}
 }
 
 
@@ -308,7 +319,12 @@ def read_settings(db_path: str) -> dict:
     conn.close()
     stored = json.loads(row[0]) if row else {}
     settings = {**DEFAULT_SETTINGS, **stored}
-    settings["ntfy"] = {**DEFAULT_SETTINGS["ntfy"], **(stored.get("ntfy") or {})}
+    for channel in CHANNELS:
+        settings[channel] = {**DEFAULT_SETTINGS[channel], **(stored.get(channel) or {})}
+    status = stored.get("status")
+    if isinstance(status, dict) and "ok" in status:
+        status = {"ntfy": status}   # before Telegram, "status" was ntfy's alone
+    settings["status"] = status or {}
     return settings
 
 
@@ -321,10 +337,12 @@ def write_settings(db_path: str, settings: dict):
 
 
 def public_settings(settings: dict) -> dict:
-    """Settings as the browser may see them: the access token never leaves the server."""
-    ntfy = settings["ntfy"]
+    """Settings as the browser may see them: tokens never leave the server."""
+    ntfy, telegram = settings["ntfy"], settings["telegram"]
     return {
         "ntfy": {"url": ntfy["url"], "enabled": ntfy["enabled"], "has_token": bool(ntfy["token"])},
+        "telegram": {"chat_id": telegram["chat_id"], "enabled": telegram["enabled"],
+                     "has_token": bool(telegram["token"])},
         "click_url": settings["click_url"],
         "digest_hour": settings["digest_hour"],
         "status": settings["status"],
@@ -358,6 +376,106 @@ def ntfy_publish(url: str, token: str, title: str, message: str, tone: str, clic
         raise RuntimeError(reason) from e
     except urllib.error.URLError as e:
         raise RuntimeError(f"ntfy is unreachable ({e.reason})") from e
+
+
+EMOJI = {"crit": "🚨", "warn": "⚠️", "resolved": "✅", "digest": "📦"}
+
+
+def _telegram_reason(code: int, description: str) -> str:
+    text = description.lower()
+    if code in (401, 404):
+        return "Telegram rejected the bot token"
+    if "chat not found" in text:
+        return "Telegram does not know that chat: send your bot a message, then use Find my chat"
+    if "blocked by the user" in text:
+        return "the bot is blocked in that chat; unblock it in Telegram"
+    if code == 409:
+        return "the bot has a webhook set, so its messages cannot be read here; enter the chat ID by hand"
+    if code == 429:
+        return "Telegram is rate limiting this bot"
+    return f"Telegram answered {code}: {description}" if description else f"Telegram answered {code}"
+
+
+def _telegram_call(token: str, method: str, payload: dict, retry: bool = True):
+    """Call the Bot API and return its result. Errors never include the
+    token, which is part of the URL."""
+    if not TELEGRAM_TOKEN.match(token or ""):
+        raise ValueError("that does not look like a bot token from @BotFather (digits, a colon, then letters)")
+    req = urllib.request.Request(
+        f"{TELEGRAM_API}/bot{token}/{method}", data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "User-Agent": "HomeLab-Dashboard"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        try:
+            answer = json.loads(e.read())
+        except ValueError:
+            answer = {}
+        wait = (answer.get("parameters") or {}).get("retry_after")
+        if e.code == 429 and retry and isinstance(wait, int) and wait <= 30:
+            # A burst, such as every service going down at once: wait it out once.
+            time.sleep(wait)
+            return _telegram_call(token, method, payload, retry=False)
+        raise RuntimeError(_telegram_reason(e.code, answer.get("description", ""))) from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Telegram is unreachable ({e.reason})") from None
+    if not body.get("ok"):
+        raise RuntimeError(_telegram_reason(0, body.get("description", "")))
+    return body["result"]
+
+
+def telegram_send(token: str, chat_id: str, title: str, message: str, tone: str, click: str = ""):
+    """Send one message: bold title, details, and a link to the dashboard."""
+    if not TELEGRAM_CHAT.match(chat_id or ""):
+        raise ValueError("the chat ID should be a number such as 123456789 (use Find my chat)")
+    lines = [f"{EMOJI[tone]} <b>{html.escape(title)}</b>"]
+    if message and message != title:
+        lines.append(html.escape(message))
+    if click:
+        lines.append(f'<a href="{html.escape(click, quote=True)}">Open the dashboard</a>')
+    _telegram_call(token, "sendMessage", {
+        "chat_id": chat_id,
+        "text": "\n".join(lines),
+        "parse_mode": "HTML",
+        # Resolutions and the daily summary arrive without a sound, like
+        # ntfy's low priority for them.
+        "disable_notification": tone in ("resolved", "digest"),
+        "link_preview_options": {"is_disabled": True},
+    })
+
+
+def telegram_chats(token: str) -> List[dict]:
+    """Chats that have recently messaged the bot, most recent first, so the
+    chat ID can be picked rather than looked up. Reading does not mark the
+    messages as seen."""
+    chats: Dict[int, dict] = {}
+    for update in _telegram_call(token, "getUpdates", {"limit": 100, "timeout": 0}):
+        for key in ("message", "edited_message", "channel_post", "my_chat_member"):
+            chat = (update.get(key) or {}).get("chat")
+            if not chat:
+                continue
+            name = (chat.get("title")
+                    or " ".join(filter(None, (chat.get("first_name"), chat.get("last_name"))))
+                    or chat.get("username") or str(chat["id"]))
+            chats.pop(chat["id"], None)   # re-inserted below, so the latest sorts last
+            chats[chat["id"]] = {"id": str(chat["id"]), "name": name, "type": chat.get("type", "")}
+    return list(reversed(chats.values()))
+
+
+def channel_ready(settings: dict, channel: str) -> bool:
+    c = settings[channel]
+    if not c["enabled"]:
+        return False
+    return bool(c["url"]) if channel == "ntfy" else bool(c["token"] and c["chat_id"])
+
+
+def send(settings: dict, channel: str, title: str, message: str, tone: str):
+    c = settings[channel]
+    if channel == "ntfy":
+        ntfy_publish(c["url"], c["token"], title, message, tone, settings["click_url"])
+    else:
+        telegram_send(c["token"], c["chat_id"], title, message, tone, settings["click_url"])
 
 
 def notification_for(kind: str, alert: dict) -> Tuple[str, str, str]:

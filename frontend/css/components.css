@@ -1250,6 +1250,9 @@ body.is-arranging * {
 .toast[data-tone='ok'] { border-left-color: var(--ok); }
 .toast[data-tone='ok'] i { color: var(--ok); }
 
+.toast[data-tone='warn'] { border-left-color: var(--warn); }
+.toast[data-tone='warn'] i { color: var(--warn); }
+
 /* --- Auth overlay ------------------------------------------------------- */
 .auth {
     position: fixed;
@@ -1509,11 +1512,6 @@ body.is-arranging * {
 }
 
 /* --- Settings form ------------------------------------------------------- */
-.settings {
-    position: sticky;
-    top: calc(var(--topbar-h) + var(--s-4));
-}
-
 .settings__body {
     display: flex;
     flex-direction: column;
@@ -1573,6 +1571,58 @@ body.is-arranging * {
 .settings__actions {
     display: flex;
     gap: var(--s-2);
+}
+
+/* One block per notification channel. */
+.channel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    margin: 0;
+    padding: var(--s-3) var(--s-3) var(--s-4);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    min-width: 0;
+}
+
+.channel__title {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: 0 var(--s-1);
+    font-size: var(--t-12);
+    font-weight: 600;
+    color: var(--fg-muted);
+}
+
+.channel__steps {
+    margin: 0;
+    padding-left: 1.2em;
+    font-size: var(--t-11);
+    line-height: 1.5;
+    color: var(--fg-subtle);
+}
+
+.channel__steps code {
+    font-family: var(--font-mono);
+    font-size: var(--t-10);
+}
+
+.field__row {
+    display: flex;
+    gap: var(--s-2);
+}
+
+.field__row input {
+    flex: 1;
+    min-width: 0;
+}
+
+.btn--small {
+    height: 38px;
+    padding: 0 var(--s-3);
+    font-size: var(--t-12);
+    white-space: nowrap;
 }
 
 .settings__actions .btn {
