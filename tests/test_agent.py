@@ -1,5 +1,6 @@
 """Agent: image reference parsing, registry lookups, Docker update checks, VM override."""
 
+import ctypes
 import io
 import json
 import subprocess
@@ -131,3 +132,74 @@ def test_reclaimable_zfs_cache_counts_as_free(tmp_path, monkeypatch):
     assert agent.zfs_arc_reclaimable() == 15 * 1024 ** 3   # 16 GB of cache above a 1 GB minimum
     monkeypatch.setattr(agent, "ARCSTATS", str(tmp_path / "missing"))
     assert agent.zfs_arc_reclaimable() == 0
+
+
+def test_package_power_sums_the_pkg_instances_only():
+    readings = {"rapl_package0_core0_core": 3512.37, "rapl_package0_pkg": 69188.12, "_total": 0.0}
+    assert agent.package_watts(readings) == pytest.approx(69.18812)
+    assert agent.package_watts({"rapl_package0_pkg": 40000, "rapl_package1_pkg": 30000}) == 70.0
+    assert agent.package_watts({"_total": 0.0}) is None
+
+
+class FakePdh:
+    """Stands in for pdh.dll: answers the calls the way Windows does, from
+    `samples` (instance name -> (status, milliwatts))."""
+
+    def __init__(self, samples, fail_add=False):
+        self.samples, self.fail_add, self.collected = samples, fail_add, 0
+        self._keep = []
+
+    def PdhOpenQueryW(self, source, user, query):
+        query._obj.value = 1
+        return 0
+
+    def PdhAddEnglishCounterW(self, query, path, user, counter):
+        assert path == r"\Energy Meter(*)\Power"
+        if self.fail_add:
+            return 0xC0000BB8 - (1 << 32)   # PDH_CSTATUS_NO_OBJECT, as a signed int
+        counter._obj.value = 2
+        return 0
+
+    def PdhCollectQueryData(self, query):
+        self.collected += 1
+        return 0
+
+    def PdhGetFormattedCounterArrayW(self, counter, fmt, size, count, buffer):
+        Item = agent.WindowsEnergyMeter._Item
+        items = (Item * len(self.samples))()
+        for item, (name, (status, mw)) in zip(items, self.samples.items()):
+            item.szName = name
+            item.FmtValue.CStatus = status
+            item.FmtValue.value.doubleValue = mw
+        self._keep.append(items)
+        count._obj.value = len(self.samples)
+        if buffer is None or size._obj.value < ctypes.sizeof(items):
+            size._obj.value = ctypes.sizeof(items)
+            return agent.WindowsEnergyMeter.PDH_MORE_DATA - (1 << 32)
+        ctypes.memmove(buffer, items, ctypes.sizeof(items))
+        return 0
+
+
+def test_energy_meter_reads_the_package_counter_through_pdh():
+    pdh = FakePdh({"rapl_package0_core0_core": (0, 3512.37), "rapl_package0_pkg": (0, 69188.12),
+                   "_total": (0, 0.0)})
+    meter = agent.WindowsEnergyMeter(pdh)
+    assert pdh.collected == 1                      # primed at start
+    assert meter.read() == pytest.approx(69.18812)
+    # A sample Windows marks invalid (e.g. too soon after the last) is skipped.
+    pdh.samples["rapl_package0_pkg"] = (0xC0000BBA, 1.0)
+    assert meter.read() is None
+
+
+def test_without_pdh_the_agent_falls_back_to_powershell(monkeypatch):
+    monkeypatch.setattr(agent, "WindowsEnergyMeter", lambda: agent.WindowsEnergyMeter(FakePdh({}, fail_add=True)))
+    monkeypatch.setattr(agent.state, "energy_meter", None)
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs["timeout"]))
+        return subprocess.CompletedProcess(cmd, 0, stdout="69188.12\n", stderr="")
+    monkeypatch.setattr(agent.subprocess, "run", run)
+    assert agent.windows_cpu_power() == pytest.approx(69.18812)
+    assert agent.state.energy_meter is False
+    assert "-NoProfile" in calls[0][0] and calls[0][1] == 5

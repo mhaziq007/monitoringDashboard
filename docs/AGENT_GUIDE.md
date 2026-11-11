@@ -99,11 +99,13 @@ $$\text{Power (Watts)} = \frac{E_{\text{current}} - E_{\text{previous}}}{(\Delta
 Inspects `/sys/class/hwmon/hwmon*/power*_input` with matching driver labels (`fam15h_power`, `zenpower`, `coretemp`, `intel_rapl`).
 
 #### 3. Windows Performance Counters
-Executes PowerShell counter query:
+Windows publishes the CPU's RAPL energy counters as the **Energy Meter** counter set (`\Energy Meter(*)\Power`, in milliwatts), with one instance per core and one per package, e.g. `rapl_package0_pkg`. The agent reads it through the PDH API (`pdh.dll`, via `ctypes`), keeping one query open for the agent's lifetime, so each report's read takes milliseconds. It sums the `*_pkg` instances (one per CPU socket) and converts to Watts. The English counter name is used, so it works on Windows in any language.
+
+If PDH cannot be used, it falls back to PowerShell (`-NoProfile`, 5-second timeout):
 ```powershell
 (Get-Counter -Counter '\Energy Meter(*_pkg)\Power' -ErrorAction SilentlyContinue).CounterSamples.CookedValue
 ```
-Converts milliwatts to Watts.
+Check what a machine offers with `(Get-Counter '\Energy Meter(*)\Power').CounterSamples | Select-Object InstanceName, CookedValue`. Machines without the counter set show no CPU power.
 
 #### 4. Model-Based TDP Estimation Fallback
 For embedded low-power appliances without hardware energy sensors (e.g., AMD embedded SoCs), the agent calculates power consumption using empirical load curves:
