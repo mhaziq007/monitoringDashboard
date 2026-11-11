@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import platform
@@ -41,6 +42,7 @@ class AgentState:
         self.is_vm = False
         self.docker_updates = {}
         self.last_docker_check = 0.0
+        self.energy_meter = None   # WindowsEnergyMeter, or False once PDH has failed
 
 state = AgentState()
 
@@ -261,19 +263,99 @@ def get_gpu_status():
         pass
     return None
 
+def package_watts(readings):
+    """Sum the CPU package instances (e.g. rapl_package0_pkg) of the Energy
+    Meter Power counter, which reads in milliwatts; None when there are none.
+    The per-core instances and _total are left out."""
+    pkg = [mw for name, mw in readings.items() if name.lower().endswith("_pkg")]
+    return sum(pkg) / 1000.0 if pkg else None
+
+
+class WindowsEnergyMeter:
+    """CPU package power from Windows' Energy Meter counters (RAPL), read
+    through the PDH API. The query stays open between reports, so a read
+    takes milliseconds; a fresh PowerShell running Get-Counter took longer
+    than its timeout allowed, so the reading was lost."""
+
+    PATH = r"\Energy Meter(*)\Power"
+    PDH_FMT_DOUBLE = 0x00000200
+    PDH_MORE_DATA = 0x800007D2
+    VALID = (0, 1)   # PDH_CSTATUS_VALID_DATA, PDH_CSTATUS_NEW_DATA
+
+    class _Value(ctypes.Structure):
+        class _Union(ctypes.Union):
+            _fields_ = [("longValue", ctypes.c_long), ("doubleValue", ctypes.c_double),
+                        ("largeValue", ctypes.c_longlong), ("WideStringValue", ctypes.c_wchar_p)]
+        _fields_ = [("CStatus", ctypes.c_uint32), ("value", _Union)]
+
+    class _Item(ctypes.Structure):
+        pass
+    _Item._fields_ = [("szName", ctypes.c_wchar_p), ("FmtValue", _Value)]
+
+    def __init__(self, pdh=None):
+        self.pdh = pdh if pdh is not None else ctypes.windll.pdh
+        self.query = ctypes.c_void_p()
+        self.counter = ctypes.c_void_p()
+        self._check(self.pdh.PdhOpenQueryW(None, 0, ctypes.byref(self.query)), "PdhOpenQueryW")
+        # The English name works on Windows in any language.
+        self._check(self.pdh.PdhAddEnglishCounterW(self.query, self.PATH, 0, ctypes.byref(self.counter)),
+                    "PdhAddEnglishCounterW")
+        # A first sample, so the next read has two to work from.
+        self.pdh.PdhCollectQueryData(self.query)
+
+    @staticmethod
+    def _check(status, call):
+        if status & 0xFFFFFFFF:
+            raise OSError(f"{call} failed with 0x{status & 0xFFFFFFFF:08X}")
+
+    def read(self):
+        self._check(self.pdh.PdhCollectQueryData(self.query), "PdhCollectQueryData")
+        size, count = ctypes.c_uint32(0), ctypes.c_uint32(0)
+        status = self.pdh.PdhGetFormattedCounterArrayW(
+            self.counter, self.PDH_FMT_DOUBLE, ctypes.byref(size), ctypes.byref(count), None)
+        if status & 0xFFFFFFFF != self.PDH_MORE_DATA:
+            self._check(status, "PdhGetFormattedCounterArrayW")
+            return None   # no instances
+        buffer = (ctypes.c_byte * size.value)()
+        self._check(self.pdh.PdhGetFormattedCounterArrayW(
+            self.counter, self.PDH_FMT_DOUBLE, ctypes.byref(size), ctypes.byref(count), buffer),
+            "PdhGetFormattedCounterArrayW")
+        items = ctypes.cast(buffer, ctypes.POINTER(self._Item * count.value)).contents
+        return package_watts({item.szName: item.FmtValue.value.doubleValue
+                              for item in items if item.FmtValue.CStatus in self.VALID})
+
+
+def windows_cpu_power():
+    """Package power on Windows: through PDH, or PowerShell if PDH cannot be used."""
+    if state.energy_meter is None:
+        try:
+            state.energy_meter = WindowsEnergyMeter()
+        except Exception as e:
+            print(f"Energy Meter counters unavailable through PDH ({e}); trying PowerShell instead")
+            state.energy_meter = False
+    if state.energy_meter:
+        try:
+            return state.energy_meter.read()
+        except Exception:
+            return None
+    try:
+        # -NoProfile: loading the user's profile alone could use up the timeout.
+        cmd = ['powershell', '-NoProfile', '-Command',
+               "(Get-Counter -Counter '\\Energy Meter(*_pkg)\\Power' -ErrorAction SilentlyContinue)"
+               ".CounterSamples.CookedValue"]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5,
+                             creationflags=creationflags)
+        values = [float(v) for v in res.stdout.split()] if res.returncode == 0 else []
+        return sum(values) / 1000.0 if values else None
+    except Exception:
+        return None
+
+
 def get_cpu_power():
     """Retrieve the real-time CPU package power draw in Watts."""
     sys_name = platform.system()
     if sys_name == "Windows":
-        try:
-            # Query the CPU RAPL package power counter in milliwatts
-            cmd = ['powershell', '-Command', '(Get-Counter -Counter \'\\Energy Meter(*_pkg)\\Power\' -ErrorAction SilentlyContinue).CounterSamples.CookedValue']
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=2, creationflags=creationflags)
-            if res.returncode == 0 and res.stdout.strip():
-                # Value is in milliwatts, return as Watts
-                return float(res.stdout.strip().split('\n')[0]) / 1000.0
-        except Exception:
-            pass
+        return windows_cpu_power()
     elif sys_name == "Linux":
         # 1. Query Linux RAPL package 0 energy counter (Intel/AMD)
         try:
