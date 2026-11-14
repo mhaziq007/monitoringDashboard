@@ -28,6 +28,7 @@ let drawerCharts = [];
 const nodeHistory = new Map();   // hostname -> that node's samples for the selected range
 let charts = [];     // power, CPU, memory and network, all fed from `samples`
 let samples = [];    // history for the selected range, oldest first
+let labPower = null;   // trailing fleet-draw averages, from /api/lab-power
 let range = '6h';
 
 const grid = document.getElementById('node-grid');
@@ -698,6 +699,16 @@ async function saveDiskAlert(select) {
 
 let serverAlerts = [];   // active alerts raised by the server, sent on the stream
 
+async function loadLabPower() {
+    try {
+        labPower = await getJson('/api/lab-power');
+    } catch (err) {
+        // A server restarted before this update has no such endpoint. The
+        // snapshot figure still stands; the average just stays blank.
+        console.error('Lab power average request failed:', err);
+    }
+}
+
 function updateFleet() {
     const all = [...nodes.values()];
     const live = all.filter(isOnline);
@@ -738,6 +749,10 @@ function updateFleet() {
     const peakMonth = TARIFF.peakMonths.includes(new Date().getMonth() + 1);
     set('stat-cost-foot', `per month · $${effectiveRate().toFixed(2)}/kWh `
         + (peakMonth ? 'peak/off-peak blend' : 'off-peak'));
+    const average = labPower?.avg_24h;
+    set('stat-cost-avg', (average === null || average === undefined)
+        ? '24h average —'
+        : `24h avg ${money(monthlyCost(average))}/mo · ${labPower.samples_24h} readings`);
 
     const load = fleetLoad(live);
     const pct = (value) => (value === null ? '—' : `${value.toFixed(0)}<small>%</small>`);
@@ -1120,6 +1135,7 @@ async function start() {
     });
 
     loadHistory('6h');
+    loadLabPower();
     // Before the first reports arrive, so a disk set to "off" never alerts.
     await loadDiskAlerts();
     document.addEventListener('change', (event) => {
@@ -1142,6 +1158,7 @@ async function start() {
             if (reconnected) {
                 loadHistory(range);
                 loadDiskAlerts();   // changes made while the stream was down
+                loadLabPower();
             } else {
                 historyHosts().forEach(loadNodeHistory);
             }
@@ -1169,7 +1186,7 @@ async function start() {
     });
 
     // The server records each node once a minute.
-    setInterval(() => historyHosts().forEach(loadNodeHistory), 60000);
+    setInterval(() => { loadLabPower(); historyHosts().forEach(loadNodeHistory); }, 60000);
 
     // Nothing pushes an "went offline" event, so re-evaluate staleness locally.
     setInterval(() => {

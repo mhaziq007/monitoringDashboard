@@ -1190,6 +1190,35 @@ async def get_power_history(range: str = "6h", current_user: str = Depends(get_c
 
     return await asyncio.to_thread(fetch_data)
 
+@app.get("/api/lab-power")
+async def get_lab_power(current_user: str = Depends(get_current_user)):
+    """Fleet draw averaged over trailing windows.
+
+    The header's cost is a projection of this instant, so it swings with
+    whatever the lab happens to be doing; these means are what it settles to.
+    A 0 W sample is left out: nothing reported during that minute, not a lab
+    drawing nothing, and keeping it would drag every average down."""
+
+    def fetch_data():
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            now = time.time()
+            out = {}
+            for label, span in (("24h", 86400), ("7d", 604800), ("30d", 2592000)):
+                count, average = cursor.execute(
+                    "SELECT COUNT(*), AVG(power) FROM power_log "
+                    "WHERE timestamp >= ? AND power > 0", (now - span,)).fetchone()
+                out[f"avg_{label}"] = round(average, 1) if average is not None else None
+                out[f"samples_{label}"] = count
+            conn.close()
+            return out
+        except Exception as query_err:
+            print(f"Error querying lab power averages: {query_err}")
+            return {}
+
+    return await asyncio.to_thread(fetch_data)
+
 # Window per uptime range; each is split into this many slots for the bar.
 SERVICE_RANGES = {"24h": 86400, "7d": 604800, "30d": 2592000}
 SERVICE_SLOTS = 48
