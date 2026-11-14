@@ -38,7 +38,9 @@ def db(sql, args=()):
 
 
 def test_endpoints_need_a_session(client):
-    assert TestClient(main.app).get("/api/devices").status_code == 401
+    anonymous = TestClient(main.app)
+    assert anonymous.get("/api/devices").status_code == 401
+    assert anonymous.get("/api/lab-power").status_code == 401
 
 
 def test_reports_need_the_agent_key(client):
@@ -105,6 +107,27 @@ def test_service_uptime_has_48_slots_with_gaps(client):
     assert history["uptime"] == 90.0
     assert history["slots"][0] is None                # nothing recorded a day ago
     assert history["slots"][-1]["up"] == pytest.approx(0.9)
+
+
+def test_lab_power_averages_windows_and_skips_unreported_minutes(client):
+    now = time.time()
+    db("INSERT INTO power_log (timestamp, power) VALUES (?, ?)", (now - 600, 100))
+    db("INSERT INTO power_log (timestamp, power) VALUES (?, ?)", (now - 300, 200))
+    db("INSERT INTO power_log (timestamp, power) VALUES (?, ?)", (now - 240, 0))          # no report that minute
+    db("INSERT INTO power_log (timestamp, power) VALUES (?, ?)", (now - 29 * 86400, 999))  # a month back
+    lab = client.get("/api/lab-power").json()
+    assert lab["avg_24h"] == 150.0 and lab["samples_24h"] == 2
+    assert lab["avg_7d"] == 150.0 and lab["samples_7d"] == 2
+    assert lab["avg_30d"] == 433.0
+    assert lab["samples_30d"] == 3
+
+
+def test_lab_power_with_no_history_is_null(client):
+    assert client.get("/api/lab-power").json() == {
+        "avg_24h": None, "samples_24h": 0,
+        "avg_7d": None, "samples_7d": 0,
+        "avg_30d": None, "samples_30d": 0,
+    }
 
 
 def test_fleet_load_counts_vms_and_weights_memory():
